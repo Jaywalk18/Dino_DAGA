@@ -1,0 +1,16 @@
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  V2Ray binary is /usr/local/bin/v2ray
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  V2Ray asset directory is /run/user/0/v2raya
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  v2rayA working directory is /home/user/zhoutianjian/Dino_DAGA
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  v2rayA configuration directory is /etc/v2raya
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  Golang: go1.22.5
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  OS: linux
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  Arch: amd64
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  Lite: false
+2025/10/29 16:06:54.611 [1;36m[A][0m [main.go:29]  Version: 2.2.5.8
+2025/10/29 16:06:54.612 [1;36m[A][0m [main.go:29]  Starting...
+2025/10/29 16:06:54.732 [1;34m[I][0m [io.go:431]  V2Ray 5.22.0 (V2Fly, a community-driven edition of V2Ray.) Custom (go1.23.2 linux/amd64)
+2025/10/29 16:06:54.733 [1;34m[I][0m [io.go:431]  A unified platform for anti-censorship.
+2025/10/29 16:06:56.099 [1;34m[I][0m [io.go:431]  127.0.0.1:48942 accepted tcp:127.0.0.1:0 [api-out]
+2025/10/29 16:06:56.109 [1;36m[A][0m [index.go:116]  v2rayA is listening at http://127.0.0.1:2017
+2025/10/29 16:06:56.109 [1;36m[A][0m [index.go:116]  v2rayA is listening at http://172.17.0.3:2017
+2025/10/29 16:06:56.109 [1;36m[A][0m [index.go:116]  v2rayA is listening at http://[::1]:2017
