@@ -1,0 +1,26 @@
+# 排除数据文件夹
+data/
+
+# 排除日志和输出
+swanlog/
+segmentation_results/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 模型文件
+*.pth
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 临时文件
+*.log
+*~
+.DS_Store
