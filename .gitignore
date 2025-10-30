@@ -1,6 +1,3 @@
-# 排除数据文件夹
-data/
-
 # 排除日志和输出
 swanlog/
 segmentation_results/
