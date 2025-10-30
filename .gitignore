@@ -4,6 +4,7 @@ data/
 # 排除日志和输出
 swanlog/
 segmentation_results/
+.qoder/
 
 # Python 缓存
 __pycache__/

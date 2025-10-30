@@ -44,7 +44,7 @@ python main_classification.py \
     --input_size $INPUT_SIZE \
     --epochs $TEST_EPOCHS \
     --batch_size 64 \
-    --lr 5e-5 \
+    --lr 1e-2 \
     --seed $SEED \
     --output_dir ./test_outputs/classification \
     --swanlab_name "cifar100_baseline_test" \
@@ -69,7 +69,7 @@ python main_classification.py \
     --input_size $INPUT_SIZE \
     --epochs $TEST_EPOCHS \
     --batch_size 64 \
-    --lr 5e-5 \
+    --lr 1e-2 \
     --seed $SEED \
     --use_daga \
     --daga_layers 11 \
