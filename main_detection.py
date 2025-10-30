@@ -72,6 +72,7 @@ def parse_arguments():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
     parser.add_argument("--output_dir", default="./outputs", help="Output directory")
+    parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
     parser.add_argument("--swanlab_name", type=str, default=None, help="SwanLab experiment name")
     parser.add_argument("--log_freq", type=int, default=5, help="Visualization log frequency")
     parser.add_argument(
@@ -167,8 +168,9 @@ def main():
     print(f"Final Val Loss:   {final_loss:.4f}")
     print(f"Results saved to: {output_dir}\n{'='*70}\n")
     
-    import swanlab
-    swanlab.finish()
+    if args.enable_swanlab:
+        import swanlab
+        swanlab.finish()
 
 
 if __name__ == "__main__":

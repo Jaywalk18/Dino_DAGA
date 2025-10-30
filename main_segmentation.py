@@ -78,6 +78,7 @@ def parse_arguments():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
     parser.add_argument("--output_dir", default="./outputs", help="Output directory")
+    parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
     parser.add_argument("--swanlab_name", type=str, default=None, help="SwanLab experiment name")
     parser.add_argument("--log_freq", type=int, default=5, help="Visualization log frequency")
     parser.add_argument(
@@ -157,7 +158,7 @@ def main():
         num_classes,
     )
     
-    finalize_experiment(best_miou, final_miou, total_time, output_dir, metric_name="mIoU")
+    finalize_experiment(best_miou, final_miou, total_time, output_dir, metric_name="mIoU", enable_swanlab=args.enable_swanlab)
 
 
 if __name__ == "__main__":

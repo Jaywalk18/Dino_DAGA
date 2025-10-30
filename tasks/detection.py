@@ -140,6 +140,9 @@ def setup_training_components(model, args):
     def lr_lambda(epoch):
         if epoch < warmup_epochs:
             return (epoch + 1) / warmup_epochs
+        # Avoid division by zero for single epoch training
+        if args.epochs <= warmup_epochs:
+            return 1.0
         return 0.5 * (
             1 + np.cos(np.pi * (epoch - warmup_epochs) / (args.epochs - warmup_epochs))
         )
@@ -372,7 +375,7 @@ def run_training_loop(
                     swanlab.Image(fig) for fig in vis_figs
                 ]
         
-        swanlab.log(log_dict, step=epoch + 1)
+        swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
         
         if val_loss < best_loss:
             best_loss = val_loss
