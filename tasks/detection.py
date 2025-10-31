@@ -160,13 +160,13 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     for b in range(batch_size):
         if len(boxes_list[b]) > 0:
             obj_loss = F.binary_cross_entropy_with_logits(
-                obj_pred[b].mean(), 
+                obj_pred[b].mean().unsqueeze(0), 
                 torch.ones(1, device=obj_pred.device) * 0.5
             )
             total_loss += obj_loss
         else:
             obj_loss = F.binary_cross_entropy_with_logits(
-                obj_pred[b].mean(), 
+                obj_pred[b].mean().unsqueeze(0), 
                 torch.zeros(1, device=obj_pred.device)
             )
             total_loss += obj_loss
@@ -185,7 +185,8 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
         images = images.to(device)
         optimizer.zero_grad()
         
-        cls_pred, bbox_pred, obj_pred, _, _ = model(images, request_visualization_maps=False)
+        # Call with positional argument to avoid DataParallel kwargs issue
+        cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
         
         loss = detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list)
         loss.backward()
@@ -208,7 +209,8 @@ def evaluate(model, dataloader, device):
         for images, boxes_list, labels_list in tqdm(dataloader, desc="Evaluating"):
             images = images.to(device)
             
-            cls_pred, bbox_pred, obj_pred, _, _ = model(images, request_visualization_maps=False)
+            # Call with positional argument to avoid DataParallel kwargs issue
+            cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
             
             loss = detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list)
             total_loss += loss.item()
@@ -232,7 +234,7 @@ def visualize_detection_results(
         num_patches_expected = H * W
         
         cls_pred, bbox_pred, obj_pred, adapted_attn_weights, _ = base_model(
-            fixed_images, request_visualization_maps=True
+            fixed_images, True
         )
         
         adapted_attn_np = None

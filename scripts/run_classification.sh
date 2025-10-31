@@ -105,7 +105,7 @@ run_experiment() {
 # =============================================================================
 
 if [ "$MODE" = "test" ]; then
-    echo "🧪 QUICK TEST MODE (1 epoch, 10% data)"
+    echo "🧪 QUICK TEST MODE (1 epoch, 1% data)"
     echo ""
     
     # CIFAR-100 Baseline
@@ -118,7 +118,7 @@ if [ "$MODE" = "test" ]; then
         4e-3 \
         "false" \
         "" \
-        0.1 \
+        0.01 \
         "test_cifar100_baseline"
     
     # CIFAR-100 with DAGA
@@ -131,7 +131,7 @@ if [ "$MODE" = "test" ]; then
         4e-3 \
         "true" \
         "11" \
-        0.1 \
+        0.01 \
         "test_cifar100_daga_L11"
     
     echo "========================================================================"

@@ -58,7 +58,8 @@ run_experiment() {
     local lr=$4
     local use_daga=$5
     local daga_layers=$6
-    local swanlab_name=$7
+    local max_samples=$7
+    local swanlab_name=$8
     
     echo "▶️  Running: $exp_name"
     echo "─────────────────────────────────────────────────────────────────────"
@@ -66,6 +67,11 @@ run_experiment() {
     local daga_args=""
     if [ "$use_daga" = "true" ]; then
         daga_args="--use_daga --daga_layers $daga_layers"
+    fi
+    
+    local max_samples_args=""
+    if [ -n "$max_samples" ] && [ "$max_samples" != "0" ]; then
+        max_samples_args="--max_samples $max_samples"
     fi
     
     python main_segmentation.py \
@@ -79,6 +85,7 @@ run_experiment() {
         --lr $lr \
         --seed $SEED \
         $daga_args \
+        $max_samples_args \
         --out_indices 2 5 8 11 \
         --output_dir ./outputs/segmentation \
         --swanlab_name "$swanlab_name" \
@@ -100,7 +107,7 @@ run_experiment() {
 # =============================================================================
 
 if [ "$MODE" = "test" ]; then
-    echo "🧪 QUICK TEST MODE (1 epoch)"
+    echo "🧪 QUICK TEST MODE (1 epoch, 1% data)"
     echo ""
     
     # Check if ADE20K dataset exists
@@ -110,6 +117,9 @@ if [ "$MODE" = "test" ]; then
         exit 1
     fi
     
+    # Calculate 1% of ADE20K training data (~200 samples from 20210)
+    MAX_SAMPLES=200
+    
     # ADE20K Segmentation Baseline
     run_experiment \
         "ADE20K Segmentation Baseline (Test)" \
@@ -118,6 +128,7 @@ if [ "$MODE" = "test" ]; then
         1e-4 \
         "false" \
         "" \
+        $MAX_SAMPLES \
         "test_ade20k_segmentation_baseline"
     
     # ADE20K Segmentation with DAGA
@@ -128,6 +139,7 @@ if [ "$MODE" = "test" ]; then
         1e-4 \
         "true" \
         "11" \
+        $MAX_SAMPLES \
         "test_ade20k_segmentation_daga_L11"
     
     echo "========================================================================"

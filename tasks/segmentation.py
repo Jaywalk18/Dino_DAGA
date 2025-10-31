@@ -207,7 +207,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
         images, masks = images.to(device), masks.to(device)
         optimizer.zero_grad()
         
-        logits, _, _ = model(images, request_visualization_maps=False)
+        # Call with positional argument to avoid DataParallel kwargs issue
+        logits, _, _ = model(images, False)
         
         loss = criterion(logits, masks)
         loss.backward()
@@ -248,7 +249,8 @@ def evaluate(model, dataloader, device, num_classes):
             images = images.to(device)
             masks = masks.to(device)
             
-            logits, _, _ = model(images, request_visualization_maps=False)
+            # Call with positional argument to avoid DataParallel kwargs issue
+            logits, _, _ = model(images, False)
             preds = logits.argmax(dim=1)
             
             for i in range(images.size(0)):
@@ -284,7 +286,7 @@ def visualize_segmentation_results(
         num_patches_expected = H * W
         
         logits, adapted_attn_weights, _ = base_model(
-            fixed_images, request_visualization_maps=True
+            fixed_images, True
         )
         
         preds = logits.argmax(dim=1)

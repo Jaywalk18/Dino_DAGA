@@ -58,7 +58,8 @@ run_experiment() {
     local lr=$4
     local use_daga=$5
     local daga_layers=$6
-    local swanlab_name=$7
+    local max_samples=$7
+    local swanlab_name=$8
     
     echo "▶️  Running: $exp_name"
     echo "─────────────────────────────────────────────────────────────────────"
@@ -66,6 +67,11 @@ run_experiment() {
     local daga_args=""
     if [ "$use_daga" = "true" ]; then
         daga_args="--use_daga --daga_layers $daga_layers"
+    fi
+    
+    local max_samples_args=""
+    if [ -n "$max_samples" ] && [ "$max_samples" != "0" ]; then
+        max_samples_args="--max_samples $max_samples"
     fi
     
     python main_detection.py \
@@ -79,6 +85,7 @@ run_experiment() {
         --lr $lr \
         --seed $SEED \
         $daga_args \
+        $max_samples_args \
         --output_dir ./outputs/detection \
         --swanlab_name "$swanlab_name" \
         --enable_visualization \
@@ -99,7 +106,7 @@ run_experiment() {
 # =============================================================================
 
 if [ "$MODE" = "test" ]; then
-    echo "🧪 QUICK TEST MODE (1 epoch)"
+    echo "🧪 QUICK TEST MODE (1 epoch, 1% data)"
     echo ""
     
     # Check if COCO dataset exists
@@ -109,6 +116,9 @@ if [ "$MODE" = "test" ]; then
         exit 1
     fi
     
+    # Calculate 1% of COCO training data (~1173 samples from 117266)
+    MAX_SAMPLES=1200
+    
     # COCO Detection Baseline
     run_experiment \
         "COCO Detection Baseline (Test)" \
@@ -117,6 +127,7 @@ if [ "$MODE" = "test" ]; then
         1e-4 \
         "false" \
         "" \
+        $MAX_SAMPLES \
         "test_coco_detection_baseline"
     
     # COCO Detection with DAGA
@@ -127,6 +138,7 @@ if [ "$MODE" = "test" ]; then
         1e-4 \
         "true" \
         "11" \
+        $MAX_SAMPLES \
         "test_coco_detection_daga_L11"
     
     echo "========================================================================"

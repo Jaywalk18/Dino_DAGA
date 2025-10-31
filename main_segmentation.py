@@ -49,6 +49,12 @@ def parse_arguments():
         required=True,
         help="Path to dataset root",
     )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Maximum number of training samples to use (for quick testing)",
+    )
     
     parser.add_argument(
         "--use_daga",
@@ -109,7 +115,16 @@ def main():
     print(f"\n{'='*70}")
     print(f"Loading {args.dataset.upper()} dataset...")
     train_dataset, val_dataset, num_classes = get_segmentation_dataset(args)
-    print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
+    
+    # Apply max_samples limit if specified
+    if args.max_samples is not None and args.max_samples < len(train_dataset):
+        import random
+        random.seed(args.seed)
+        indices = random.sample(range(len(train_dataset)), args.max_samples)
+        train_dataset = torch.utils.data.Subset(train_dataset, indices)
+        print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val samples")
+    else:
+        print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
     print(f"  Number of classes: {num_classes}")
     
     train_loader, val_loader = create_dataloaders(

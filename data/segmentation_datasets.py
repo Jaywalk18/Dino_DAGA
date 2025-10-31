@@ -21,10 +21,10 @@ def get_segmentation_dataset(args):
 def get_ade20k_dataset(args):
     """Load ADE20K dataset for semantic segmentation"""
     
-    train_img_dir = os.path.join(args.data_path, "images/training")
-    val_img_dir = os.path.join(args.data_path, "images/validation")
-    train_ann_dir = os.path.join(args.data_path, "annotations/training")
-    val_ann_dir = os.path.join(args.data_path, "annotations/validation")
+    train_img_dir = os.path.join(args.data_path, "images/ADE/training")
+    val_img_dir = os.path.join(args.data_path, "images/ADE/validation")
+    train_ann_dir = os.path.join(args.data_path, "images/ADE/training")  # Annotations are in same dir
+    val_ann_dir = os.path.join(args.data_path, "images/ADE/validation")
     
     # Verify paths exist
     if not os.path.exists(train_img_dir):
@@ -87,22 +87,25 @@ class ADE20KDataset(Dataset):
         self.transform = transform
         self.mask_transform = mask_transform
         
-        # Get all image files
-        self.img_files = sorted([f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.png'))])
+        # Recursively get all image files from subdirectories
+        self.img_files = []
+        for root, dirs, files in os.walk(img_dir):
+            for f in files:
+                if f.endswith('.jpg'):
+                    self.img_files.append(os.path.join(root, f))
 
     def __len__(self):
         return len(self.img_files)
 
     def __getitem__(self, idx):
-        # Load image
-        img_name = self.img_files[idx]
-        img_path = os.path.join(self.img_dir, img_name)
+        # Image path is already absolute from os.walk
+        img_path = self.img_files[idx]
         image = Image.open(img_path).convert('RGB')
         
-        # Load mask (annotation)
-        # ADE20K annotations are in .png format with same base name
-        mask_name = img_name.replace('.jpg', '.png')
-        mask_path = os.path.join(self.ann_dir, mask_name)
+        # Load mask (annotation) - same path but without .jpg extension
+        # ADE20K has folder with same name as image base
+        mask_base = img_path.replace('.jpg', '')
+        mask_path = os.path.join(mask_base, f"{os.path.basename(mask_base)}_seg.png")
         
         if os.path.exists(mask_path):
             mask = Image.open(mask_path)
