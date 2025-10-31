@@ -100,30 +100,20 @@ def compute_daga_guidance_map(vit_model, x_processed, H, W, guidance_layer_idx):
     num_patches = H * W
     num_registers = seq_len - num_patches - 1
     
+    captured_guidance_attn = None
+    
     with torch.no_grad():
         guidance_features = x_processed.clone()
-        captured_guidance_attn = None
         
         for i in range(len(vit_model.blocks)):
             rope_sincos = vit_model.rope_embed(H=H, W=W) if vit_model.rope_embed else None
             
             if i == guidance_layer_idx:
-                # Calculate attention map with norm1 applied first
-                normed_x = vit_model.blocks[i].norm1(guidance_features)
-                attn_module = vit_model.blocks[i].attn
-                
-                B_attn, N_attn, C_attn = normed_x.shape
-                num_heads = attn_module.num_heads
-                head_dim = C_attn // num_heads
-                
-                qkv = attn_module.qkv(normed_x).reshape(B_attn, N_attn, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)
-                q, k, v = qkv.unbind(0)
-                
-                q = q * attn_module.scale
-                attn = q @ k.transpose(-2, -1)
-                attn = attn.softmax(dim=-1)
-                
-                captured_guidance_attn = attn
+                attn_weights = get_attention_map(
+                    vit_model.blocks[i], 
+                    guidance_features
+                )
+                captured_guidance_attn = attn_weights
             
             guidance_features = vit_model.blocks[i](guidance_features, rope_sincos)
     
@@ -139,38 +129,6 @@ def compute_daga_guidance_map(vit_model, x_processed, H, W, guidance_layer_idx):
         cls_attn_patches = cls_attn_patch_tokens_headed.mean(dim=1)
         
         # Normalize for guidance map
-        min_val = cls_attn_patches.amin(dim=1, keepdim=True)
-        max_val = cls_attn_patches.amax(dim=1, keepdim=True)
-        cls_attn = (cls_attn_patches - min_val) / (max_val - min_val + 1e-8)
-        
-        if cls_attn.shape[1] == num_patches:
-            return cls_attn.reshape(B, H, W)
-    
-    return None
-    
-    with torch.no_grad():
-        guidance_features = x_processed.clone()
-        
-        for i in range(len(vit_model.blocks)):
-            rope_sincos = (
-                vit_model.rope_embed(H=H, W=W) if vit_model.rope_embed else None
-            )
-            
-            if i == guidance_layer_idx:
-                attn_weights = get_attention_map(
-                    vit_model.blocks[i], 
-                    guidance_features
-                )
-                captured_guidance_attn = attn_weights
-            
-            guidance_features = vit_model.blocks[i](guidance_features, rope_sincos)
-    
-    if captured_guidance_attn is not None:
-        cls_attn_all_tokens = captured_guidance_attn[:, :, 0, 1:]
-        patch_start_index = num_registers
-        cls_attn_patch_tokens_headed = cls_attn_all_tokens[:, :, patch_start_index:]
-        cls_attn_patches = cls_attn_patch_tokens_headed.mean(dim=1)
-        
         min_val = cls_attn_patches.amin(dim=1, keepdim=True)
         max_val = cls_attn_patches.amax(dim=1, keepdim=True)
         cls_attn = (cls_attn_patches - min_val) / (max_val - min_val + 1e-8)

@@ -87,8 +87,6 @@ class COCODetectionDataset(Dataset):
         return len(self.ids)
 
     def __getitem__(self, idx):
-        import cv2
-        import numpy as np
         from PIL import Image
         
         img_id = self.ids[idx]
@@ -145,12 +143,14 @@ class COCODetectionDataset(Dataset):
 def detection_collate_fn(batch):
     """Custom collate function for detection datasets"""
     images = []
-    targets = []
+    boxes_list = []
+    labels_list = []
     
     for img, target in batch:
         images.append(img)
-        targets.append(target)
+        boxes_list.append(target['boxes'])
+        labels_list.append(target['labels'])
     
     images = torch.stack(images, dim=0)
     
-    return images, targets
+    return images, boxes_list, labels_list

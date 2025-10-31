@@ -316,14 +316,12 @@ def prepare_visualization_data(val_dataset, args, device):
         return None, None
     
     print(f"\n📸 Preparing visualization data...")
+    from data.detection_datasets import detection_collate_fn
+    
     indices = list(range(min(args.num_vis_samples, len(val_dataset))))
     vis_subset = torch.utils.data.Subset(val_dataset, indices)
     vis_loader = DataLoader(vis_subset, batch_size=len(indices), shuffle=False, 
-                           collate_fn=lambda x: (
-                               torch.stack([item[0] for item in x]),
-                               [item[1] for item in x],
-                               [item[2] for item in x]
-                           ))
+                           collate_fn=detection_collate_fn)
     fixed_images, fixed_boxes, fixed_labels = next(iter(vis_loader))
     print("✓ Visualization data loaded.")
     return fixed_images.to(device), fixed_boxes
