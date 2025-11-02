@@ -1,220 +1,165 @@
 #!/bin/bash
-
-# Segmentation Task Script - ADE20K Semantic Segmentation
-# Supports both quick test (1 epoch) and full training
-# Usage: 
-#   Quick test:  bash scripts/run_segmentation.sh test
-#   Full train:  bash scripts/run_segmentation.sh
-
+# run_segmentation.sh
 set -e
 
 # =============================================================================
-# Configuration
+# Section 1: Environment Activation & PYTHONPATH Setup
 # =============================================================================
-
-# Mode: test or full
-MODE=${1:-"full"}
-
-# Environment
 source activate dinov3_env
 export CUDA_VISIBLE_DEVICES=1,2,3,4,5,6
 
-# Paths
 PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
-DATA_ROOT="/home/user/zhoutianjian/DataSets"
-CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
-
-# Model configuration
-DINOV3_MODEL="dinov3_vits16"
-PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
-
-# Common parameters
-SEED=42
-INPUT_SIZE=518
-DATASET="ade20k"
-DATA_PATH="${DATA_ROOT}/ADE20K_2021_17_01"
-
 cd $PROJECT_ROOT
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
+# =============================================================================
+# Section 2: Dataset Path Validation
+# =============================================================================
+DATA_ROOT="/home/user/zhoutianjian/DataSets"
+DATASET="ade20k"
+DATA_PATH="${DATA_ROOT}/ADE20K_2021_17_01"
+
+if [ ! -d "$DATA_PATH" ]; then
+    echo "❌ ERROR: ADE20K dataset not found at: $DATA_PATH"
+    echo "Please check the data path and try again."
+    exit 1
+fi
+
+# =============================================================================
+# Section 3: Test/Full Mode Switch
+# =============================================================================
+MODE=${1:-"test"}
+
+if [ "$MODE" = "test" ]; then
+    echo "🧪 QUICK TEST MODE"
+    MAX_SAMPLES=200  # ~1% of ADE20K training data
+else
+    echo "🚀 FULL TRAINING MODE"
+    MAX_SAMPLES=0  # Use all data
+fi
+
+# =============================================================================
+# Section 4: Hyperparameter Configuration
+# =============================================================================
+
+# Model configuration
+CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
+DINOV3_MODEL="dinov3_vits16"
+PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
+
+# Training hyperparameters
+if [ "$MODE" = "test" ]; then
+    EPOCHS=1
+    BATCH_SIZE=16
+    LR=1e-4
+else
+    EPOCHS=20
+    BATCH_SIZE=16
+    LR=1e-4
+fi
+
+SEED=42
+INPUT_SIZE=518
+BASE_OUTPUT_DIR="outputs/segmentation"
+
+# =============================================================================
+# Section 5: Output Informative Prompts
+# =============================================================================
 echo "========================================================================"
-echo "Segmentation Task - DINOv3 Multi-Task Framework"
+echo "🚀 DINOv3 Semantic Segmentation - ADE20K Dataset"
 echo "========================================================================"
-echo "Mode: $MODE"
-echo "Model: $DINOV3_MODEL"
-echo "Dataset: ADE20K"
-echo "GPUs: $CUDA_VISIBLE_DEVICES"
+echo "  Mode:          ${MODE}"
+echo "  Model:         ${DINOV3_MODEL}"
+echo "  Pretrained:    ${PRETRAINED_PATH}"
+echo "  Dataset:       ADE20K"
+echo "  Data Path:     ${DATA_PATH}"
+echo "  GPU IDs:       ${CUDA_VISIBLE_DEVICES}"
+echo "  Seed:          ${SEED}"
+if [ "$MODE" = "test" ]; then
+    echo "  Max Samples:   ${MAX_SAMPLES} (~1% data for quick test)"
+fi
+echo ""
+echo "  Hyperparameters:"
+echo "    - Epochs:      ${EPOCHS}"
+echo "    - Batch Size:  ${BATCH_SIZE}"
+echo "    - Input Size:  ${INPUT_SIZE}"
+echo "    - Learn Rate:  ${LR}"
+echo "  Output Dir:    ${BASE_OUTPUT_DIR}"
 echo "========================================================================"
 echo ""
 
 # =============================================================================
-# Helper function
+# Helper function for running experiments
 # =============================================================================
 
 run_experiment() {
     local exp_name=$1
-    local epochs=$2
-    local batch_size=$3
-    local lr=$4
-    local use_daga=$5
-    local daga_layers=$6
-    local max_samples=$7
-    local swanlab_name=$8
+    local description=$2
+    shift 2
     
-    echo "▶️  Running: $exp_name"
+    local output_subdir="${BASE_OUTPUT_DIR}/${exp_name}"
+    mkdir -p "$output_subdir"
+    
+    echo -e "\n▶️  Running Experiment: ${description}"
     echo "─────────────────────────────────────────────────────────────────────"
     
-    local daga_args=""
-    if [ "$use_daga" = "true" ]; then
-        daga_args="--use_daga --daga_layers $daga_layers"
-    fi
-    
     local max_samples_args=""
-    if [ -n "$max_samples" ] && [ "$max_samples" != "0" ]; then
-        max_samples_args="--max_samples $max_samples"
+    if [ "$MAX_SAMPLES" != "0" ]; then
+        max_samples_args="--max_samples $MAX_SAMPLES"
     fi
     
     python main_segmentation.py \
-        --model_name $DINOV3_MODEL \
-        --pretrained_path $PRETRAINED_PATH \
-        --dataset $DATASET \
+        --seed "$SEED" \
+        --dataset "$DATASET" \
         --data_path "$DATA_PATH" \
-        --input_size $INPUT_SIZE \
-        --epochs $epochs \
-        --batch_size $batch_size \
-        --lr $lr \
-        --seed $SEED \
-        $daga_args \
-        $max_samples_args \
-        --out_indices 2 5 8 11 \
-        --output_dir ./outputs/segmentation \
-        --swanlab_name "$swanlab_name" \
+        --model_name "$DINOV3_MODEL" \
+        --pretrained_path "$PRETRAINED_PATH" \
+        --epochs "$EPOCHS" \
+        --batch_size "$BATCH_SIZE" \
+        --input_size "$INPUT_SIZE" \
+        --lr "$LR" \
+        --output_dir "$output_subdir" \
+        --swanlab_name "${DATASET}_${exp_name}" \
         --enable_visualization \
         --num_vis_samples 4 \
-        --log_freq 2
+        --log_freq 2 \
+        --out_indices 2 5 8 11 \
+        $max_samples_args \
+        "$@"
     
     if [ $? -eq 0 ]; then
-        echo "✅  SUCCESS: $exp_name"
+        echo "✅  SUCCESS: ${description}"
     else
-        echo "❌  FAILED: $exp_name"
+        echo "❌  FAILED: ${description}"
         exit 1
     fi
-    echo ""
 }
 
 # =============================================================================
-# Test Mode (1 epoch)
+# Experiment Runs
 # =============================================================================
 
-if [ "$MODE" = "test" ]; then
-    echo "🧪 QUICK TEST MODE (1 epoch, 1% data)"
-    echo ""
-    
-    # Check if ADE20K dataset exists
-    if [ ! -d "$DATA_PATH" ]; then
-        echo "❌ ERROR: ADE20K dataset not found at: $DATA_PATH"
-        echo "Please check the data path and try again."
-        exit 1
-    fi
-    
-    # Calculate 1% of ADE20K training data (~200 samples from 20210)
-    MAX_SAMPLES=200
-    
-    # ADE20K Segmentation Baseline
-    run_experiment \
-        "ADE20K Segmentation Baseline (Test)" \
-        1 \
-        16 \
-        1e-4 \
-        "false" \
-        "" \
-        $MAX_SAMPLES \
-        "test_ade20k_segmentation_baseline"
-    
-    # ADE20K Segmentation with DAGA
-    run_experiment \
-        "ADE20K Segmentation with DAGA (Test)" \
-        1 \
-        16 \
-        1e-4 \
-        "true" \
-        "11" \
-        $MAX_SAMPLES \
-        "test_ade20k_segmentation_daga_L11"
-    
-    echo "========================================================================"
-    echo "✅ QUICK TEST COMPLETED!"
-    echo "========================================================================"
-    echo "Check outputs in: ./outputs/segmentation/"
-    echo "Visualization results saved in: ./outputs/segmentation/*/visualizations/"
-    echo "========================================================================"
+run_experiment \
+    "01_ade20k_baseline" \
+    "Baseline (Semantic Segmentation on ADE20K)"
 
-# =============================================================================
-# Full Training Mode
-# =============================================================================
+run_experiment \
+    "02_ade20k_daga_last_layer" \
+    "DAGA Single Layer (L11)" \
+    --use_daga \
+    --daga_layers 11
 
-else
-    echo "🚀 FULL TRAINING MODE"
-    echo ""
-    
-    # Check if ADE20K dataset exists
-    if [ ! -d "$DATA_PATH" ]; then
-        echo "❌ ERROR: ADE20K dataset not found at: $DATA_PATH"
-        echo "Please check the data path and try again."
-        exit 1
-    fi
-    
-    # ------------------------------------------------------------------------
-    # ADE20K Segmentation Experiments
-    # ------------------------------------------------------------------------
-    
-    echo "========================================================================"
-    echo "ADE20K Semantic Segmentation Experiments"
-    echo "========================================================================"
-    echo ""
-    
-    # ADE20K Segmentation Baseline
-    run_experiment \
-        "ADE20K Segmentation Baseline" \
-        20 \
-        16 \
-        1e-4 \
-        "false" \
-        "" \
-        "ade20k_segmentation_baseline"
-    
-    # ADE20K Segmentation with DAGA (single layer)
-    run_experiment \
-        "ADE20K Segmentation with DAGA (L11)" \
-        20 \
-        16 \
-        1e-4 \
-        "true" \
-        "11" \
-        "ade20k_segmentation_daga_L11"
-    
-    # ADE20K Segmentation with DAGA (hourglass) - optional
-    # Uncomment if you want to test multi-layer DAGA
-    # run_experiment \
-    #     "ADE20K Segmentation with DAGA (Hourglass)" \
-    #     20 \
-    #     16 \
-    #     1e-4 \
-    #     "true" \
-    #     "1 2 10 11" \
-    #     "ade20k_segmentation_daga_hourglass"
-    
-    echo ""
-    echo "========================================================================"
-    echo "✅ ALL SEGMENTATION EXPERIMENTS COMPLETED!"
-    echo "========================================================================"
-    echo "Results saved in: ./outputs/segmentation/"
-    echo "Visualizations include:"
-    echo "  - Attention maps (Frozen vs Adapted)"
-    echo "  - Predicted segmentation masks"
-    echo "  - Ground truth comparisons"
-    echo "  - mIoU metrics"
-    echo ""
-    echo "Check SwanLab dashboard for detailed results and metrics"
-    echo "========================================================================"
-fi
+# Uncomment for multi-layer DAGA experiments
+# run_experiment \
+#     "03_ade20k_daga_hourglass" \
+#     "DAGA Hourglass Distribution" \
+#     --use_daga \
+#     --daga_layers 1 2 10 11
+
+echo ""
+echo "========================================================================"
+echo "🎉 All ADE20K Segmentation Experiments Completed Successfully!"
+echo "========================================================================"
+echo "Results saved in: ${BASE_OUTPUT_DIR}/"
+echo "Check visualizations in: ${BASE_OUTPUT_DIR}/*/visualizations/"
+echo "========================================================================"

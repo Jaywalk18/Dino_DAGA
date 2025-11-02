@@ -221,7 +221,7 @@ def evaluate(model, dataloader, device):
 def visualize_detection_results(
     model, fixed_images, fixed_boxes_list, args, output_dir, epoch
 ):
-    """Visualize detection predictions with attention maps"""
+    """Visualize detection predictions with attention maps (separated into two groups)"""
     if fixed_images is None:
         return []
     
@@ -264,16 +264,14 @@ def visualize_detection_results(
         vis_save_path.mkdir(parents=True, exist_ok=True)
         
         for j in range(images_np.shape[0]):
-            ncols = 3 if (adapted_attn_np is not None and baseline_attn_np is not None) else 1
-            fig, axes = plt.subplots(1, ncols, figsize=(5*ncols, 5))
-            if ncols == 1:
-                axes = [axes]
-            fig.suptitle(f"Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
+            # Group 1: Detection Results (Image with GT Boxes)
+            fig1, ax1 = plt.subplots(1, 1, figsize=(6, 6))
+            fig1.suptitle(f"Detection Results - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
             
             img = images_np[j].transpose(1, 2, 0)
             mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
             img = np.clip(std * img + mean, 0, 1)
-            axes[0].imshow(img)
+            ax1.imshow(img)
             
             if j < len(fixed_boxes_list):
                 boxes = fixed_boxes_list[j]
@@ -286,28 +284,41 @@ def visualize_detection_results(
                             (y2-y1)*img.shape[0],
                             linewidth=2, edgecolor='r', facecolor='none'
                         )
-                        axes[0].add_patch(rect)
+                        ax1.add_patch(rect)
             
-            axes[0].set_title("Image with GT Boxes")
-            axes[0].axis("off")
-            
-            if adapted_attn_np is not None and baseline_attn_np is not None:
-                axes[1].imshow(baseline_attn_np[j], cmap="viridis")
-                axes[1].set_title("Frozen Backbone Attn")
-                axes[1].axis("off")
-                
-                axes[2].imshow(adapted_attn_np[j], cmap="viridis")
-                axes[2].set_title("Adapted Model Attn")
-                axes[2].axis("off")
+            ax1.set_title("Image with GT Boxes")
+            ax1.axis("off")
             
             plt.tight_layout(rect=[0, 0, 1, 0.96])
-            vis_figs.append(fig)
+            vis_figs.append(fig1)
             
-            fig.savefig(
-                vis_save_path / f"epoch_{epoch+1}_sample_{j}.png",
+            fig1.savefig(
+                vis_save_path / f"epoch_{epoch+1}_sample_{j}_detection.png",
                 dpi=100,
             )
-            plt.close(fig)
+            plt.close(fig1)
+            
+            # Group 2: Attention Map Comparison (only if DAGA is used)
+            if adapted_attn_np is not None and baseline_attn_np is not None:
+                fig2, axes2 = plt.subplots(1, 2, figsize=(10, 5))
+                fig2.suptitle(f"Attention Maps - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
+                
+                axes2[0].imshow(baseline_attn_np[j], cmap="viridis")
+                axes2[0].set_title("Frozen Backbone Attn")
+                axes2[0].axis("off")
+                
+                axes2[1].imshow(adapted_attn_np[j], cmap="viridis")
+                axes2[1].set_title("Adapted Model Attn")
+                axes2[1].axis("off")
+                
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                vis_figs.append(fig2)
+                
+                fig2.savefig(
+                    vis_save_path / f"epoch_{epoch+1}_sample_{j}_attention.png",
+                    dpi=100,
+                )
+                plt.close(fig2)
     
     return vis_figs
 

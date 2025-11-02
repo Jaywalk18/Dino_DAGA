@@ -273,7 +273,7 @@ def evaluate(model, dataloader, device, num_classes):
 def visualize_segmentation_results(
     model, fixed_images, fixed_masks, args, output_dir, epoch, colormap=None
 ):
-    """Visualize segmentation predictions with attention maps"""
+    """Visualize segmentation predictions with attention maps (separated into two groups)"""
     if fixed_images is None:
         return []
     
@@ -320,42 +320,55 @@ def visualize_segmentation_results(
         vis_save_path.mkdir(parents=True, exist_ok=True)
         
         for j in range(images_np.shape[0]):
-            ncols = 5 if (adapted_attn_np is not None and baseline_attn_np is not None) else 3
-            fig, axes = plt.subplots(1, ncols, figsize=(5*ncols, 5))
-            fig.suptitle(f"Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
+            # Group 1: Segmentation Results (Image, GT, Prediction)
+            fig1, axes1 = plt.subplots(1, 3, figsize=(15, 5))
+            fig1.suptitle(f"Segmentation Results - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
             
             img = images_np[j].transpose(1, 2, 0)
             mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
             img = np.clip(std * img + mean, 0, 1)
-            axes[0].imshow(img)
-            axes[0].set_title("Original Image")
-            axes[0].axis("off")
+            axes1[0].imshow(img)
+            axes1[0].set_title("Original Image")
+            axes1[0].axis("off")
             
-            axes[1].imshow(masks_np[j], cmap='tab20')
-            axes[1].set_title("Ground Truth")
-            axes[1].axis("off")
+            axes1[1].imshow(masks_np[j], cmap='tab20')
+            axes1[1].set_title("Ground Truth")
+            axes1[1].axis("off")
             
-            axes[2].imshow(preds_np[j], cmap='tab20')
-            axes[2].set_title("Prediction")
-            axes[2].axis("off")
-            
-            if adapted_attn_np is not None and baseline_attn_np is not None:
-                axes[3].imshow(baseline_attn_np[j], cmap="viridis")
-                axes[3].set_title("Frozen Backbone Attn")
-                axes[3].axis("off")
-                
-                axes[4].imshow(adapted_attn_np[j], cmap="viridis")
-                axes[4].set_title("Adapted Model Attn")
-                axes[4].axis("off")
+            axes1[2].imshow(preds_np[j], cmap='tab20')
+            axes1[2].set_title("Prediction")
+            axes1[2].axis("off")
             
             plt.tight_layout(rect=[0, 0, 1, 0.96])
-            vis_figs.append(fig)
+            vis_figs.append(fig1)
             
-            fig.savefig(
-                vis_save_path / f"epoch_{epoch+1}_sample_{j}.png",
+            fig1.savefig(
+                vis_save_path / f"epoch_{epoch+1}_sample_{j}_segmentation.png",
                 dpi=100,
             )
-            plt.close(fig)
+            plt.close(fig1)
+            
+            # Group 2: Attention Map Comparison (only if DAGA is used)
+            if adapted_attn_np is not None and baseline_attn_np is not None:
+                fig2, axes2 = plt.subplots(1, 2, figsize=(10, 5))
+                fig2.suptitle(f"Attention Maps - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
+                
+                axes2[0].imshow(baseline_attn_np[j], cmap="viridis")
+                axes2[0].set_title("Frozen Backbone Attn")
+                axes2[0].axis("off")
+                
+                axes2[1].imshow(adapted_attn_np[j], cmap="viridis")
+                axes2[1].set_title("Adapted Model Attn")
+                axes2[1].axis("off")
+                
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                vis_figs.append(fig2)
+                
+                fig2.savefig(
+                    vis_save_path / f"epoch_{epoch+1}_sample_{j}_attention.png",
+                    dpi=100,
+                )
+                plt.close(fig2)
     
     return vis_figs
 
