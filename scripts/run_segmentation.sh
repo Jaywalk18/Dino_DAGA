@@ -139,9 +139,9 @@ run_experiment() {
 # Experiment Runs
 # =============================================================================
 
-run_experiment \
-    "01_ade20k_baseline" \
-    "Baseline (Semantic Segmentation on ADE20K)"
+# run_experiment \
+#     "01_ade20k_baseline" \
+#     "Baseline (Semantic Segmentation on ADE20K)"
 
 run_experiment \
     "02_ade20k_daga_last_layer" \
@@ -163,3 +163,4 @@ echo "========================================================================"
 echo "Results saved in: ${BASE_OUTPUT_DIR}/"
 echo "Check visualizations in: ${BASE_OUTPUT_DIR}/*/visualizations/"
 echo "========================================================================"
+
