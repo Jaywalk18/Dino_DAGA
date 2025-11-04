@@ -1,206 +1,155 @@
-# Dino_DAGA
+# DINOv3 with DAGA Plugin
 
-Dynamic Attention-Gated Adapter (DAGA) for DINOv3 Multi-Task Fine-tuning
+此项目实现了DINOv3与DAGA（Dynamic Attention-Guided Adaptation）插件的集成，支持分类、检测和分割三个下游任务。
 
-## Overview
-
-This project implements a multi-task fine-tuning framework based on DINOv3 vision transformer, enhanced with Dynamic Attention-Gated Adapter (DAGA) for improved performance across multiple computer vision tasks.
-
-### Supported Tasks
-
-- **Image Classification**: CIFAR-100, ImageNet
-- **Object Detection**: COCO
-- **Semantic Segmentation**: ADE20K
-
-### Key Features
-
-- ✓ Modular Design - Shared backbone, task-specific heads
-- ✓ SwanLab Integration - Automatic metric & visualization logging
-- ✓ Attention Visualization - Frozen backbone vs adapted model comparison
-- ✓ Task-Specific Visualizations:
-  - Classification: Attention maps + predictions
-  - Segmentation: GT/pred masks + attention maps
-  - Detection: Bounding boxes + attention maps
-
-## Quick Start
-
-### 1. Environment Setup
+## 环境设置
 
 ```bash
-# Activate conda environment
 source activate dinov3_env
-
-# Set up project paths
-export PYTHONPATH=$PYTHONPATH:/home/user/zhoutianjian/Dino_DAGA
 ```
 
-### 2. Quick Test (1 epoch)
-
-Test each task with a quick run:
-
-```bash
-# Classification
-bash scripts/run_classification.sh test
-
-# Detection
-bash scripts/run_detection.sh test
-
-# Segmentation
-bash scripts/run_segmentation.sh test
-```
-
-### 3. Full Training
-
-Run complete experiments:
-
-```bash
-# Classification (CIFAR-100 and ImageNet)
-bash scripts/run_classification.sh
-
-# Detection (COCO)
-bash scripts/run_detection.sh
-
-# Segmentation (ADE20K)
-bash scripts/run_segmentation.sh
-```
-
-## Project Structure
+## 项目结构
 
 ```
 Dino_DAGA/
-├── core/                    # Core components
-│   ├── backbones.py        # DINOv3 backbone loader
-│   ├── daga.py             # DAGA implementation
-│   ├── heads.py            # Task-specific heads
-│   └── utils.py            # Utilities and logging
-├── tasks/                   # Task implementations
-│   ├── classification.py   # Classification pipeline
-│   ├── detection.py        # Detection pipeline
-│   └── segmentation.py     # Segmentation pipeline
-├── data/                    # Data loading
+├── core/                    # 核心模块
+│   ├── backbones.py        # DINOv3骨干网络加载
+│   ├── daga.py             # DAGA模块实现
+│   ├── heads.py            # 任务头（分类、检测、分割）
+│   └── utils.py            # 工具函数
+├── data/                    # 数据集加载
 │   ├── classification_datasets.py
 │   ├── detection_datasets.py
 │   └── segmentation_datasets.py
-├── scripts/                 # Training scripts
+├── tasks/                   # 任务实现
+│   ├── classification.py   # 分类任务
+│   ├── detection.py        # 检测任务
+│   └── segmentation.py     # 分割任务
+├── scripts/                 # 训练脚本
 │   ├── run_classification.sh
 │   ├── run_detection.sh
 │   └── run_segmentation.sh
-├── main_classification.py   # Classification entry
-├── main_detection.py        # Detection entry
-└── main_segmentation.py     # Segmentation entry
+├── main_classification.py  # 分类主程序
+├── main_detection.py       # 检测主程序
+└── main_segmentation.py    # 分割主程序
 ```
 
-## DAGA Architecture
+## 数据集
 
-The Dynamic Attention-Gated Adapter consists of four core components:
+- **分类**: CIFAR-100, ImageNet (位于 `/home/user/zhoutianjian/DataSets/`)
+- **检测**: COCO 2017 (位于 `/home/user/zhoutianjian/DataSets/COCO 2017`)
+- **分割**: ADE20K (位于 `/home/user/zhoutianjian/DataSets/ADE20K_2021_17_01`)
 
-1. **AttentionEncoder**: Extracts instruction vectors from attention maps
-2. **DynamicGateGenerator**: Generates dynamic gating signals
-3. **FeatureTransformer**: Transforms and enhances features
-4. **DAGA Integration**: Combines all components for adaptive feature modification
+## 模型权重
 
-## Configuration
+DINOv3预训练权重位于 `/home/user/zhoutianjian/DAGA/checkpoints/`
 
-### Paths
+## 使用方法
 
-- **Datasets**: `/home/user/zhoutianjian/DataSets/`
-  - CIFAR: `cifar/`
-  - ImageNet: `imagenet/`
-  - COCO: `COCO 2017/`
-  - ADE20K: `ADE20K_2021_17_01/`
-- **Checkpoints**: `/home/user/zhoutianjian/DAGA/checkpoints/`
-
-### Environment
-
-- **Conda Environment**: `dinov3_env`
-- **GPUs**: 1,2,3,4,5,6 (6 GPUs)
-
-## Results
-
-Training outputs are saved in `./outputs/<task>/`, including:
-- Model checkpoints
-- Training logs
-- Visualization results
-
-SwanLab dashboard provides:
-- Training/validation metrics
-- Learning rate curves
-- Attention map comparisons
-- Task-specific visualizations
-
-## Advanced Usage
-
-### Command-Line Options
-
-Common parameters for all tasks:
+### 1. 分类任务
 
 ```bash
---model_name dinov3_vits16      # DINOv3 model variant
---pretrained_path <path>         # Path to pretrained weights
---epochs 20                      # Training epochs
---batch_size 128                 # Batch size
---lr 5e-5                        # Learning rate
---seed 42                        # Random seed
---use_daga                       # Enable DAGA
---daga_layers 11                 # DAGA insertion layers
---enable_swanlab                 # Enable SwanLab logging
---enable_visualization           # Enable attention visualization
+cd /home/user/zhoutianjian/Dino_DAGA
+./scripts/run_classification.sh
 ```
 
-Task-specific parameters:
+配置说明：
+- Dataset: CIFAR-100
+- Training Subset: 15%
+- Batch Size: 256
+- Learning Rate: 4e-3
+- Epochs: 1
 
-**Classification:**
+### 2. 检测任务
+
 ```bash
---dataset cifar100               # Dataset choice
---subset_ratio 0.1               # Use subset of data
---vis_indices 0 1 2 3            # Visualization sample indices
+cd /home/user/zhoutianjian/Dino_DAGA
+./scripts/run_detection.sh
 ```
 
-**Detection/Segmentation:**
+配置说明：
+- Dataset: COCO 2017
+- Training Samples: 12000 (~10%)
+- Batch Size: 16
+- Learning Rate: 1e-4
+- Epochs: 1
+
+输出指标包括：
+- mAP (Mean Average Precision)
+- Precision
+- Recall
+- F1 Score
+
+### 3. 分割任务
+
 ```bash
---num_vis_samples 4              # Number of visualization samples
+cd /home/user/zhoutianjian/Dino_DAGA
+./scripts/run_segmentation.sh
 ```
 
-### DAGA Layer Configurations
+配置说明：
+- Dataset: ADE20K
+- Training Samples: 2000 (~10%)
+- Batch Size: 16
+- Learning Rate: 1e-4
+- Epochs: 1
 
-- **Single Layer**: `--daga_layers 11` (last layer only)
-- **Hourglass**: `--daga_layers 1 2 10 11` (shallow + deep layers)
-- **Balanced**: `--daga_layers 3 7 11` (evenly distributed)
+输出指标包括：
+- mIoU (Mean Intersection over Union)
+- Pixel Accuracy
 
-## Troubleshooting
+## GPU配置
 
-### Common Issues
+默认使用GPU 1-6，可通过参数修改：
 
-1. **CUDA Out of Memory**
-   - Reduce batch size: `--batch_size 64`
-   - Reduce input size: `--input_size 224`
-
-2. **Dataset Not Found**
-   - Check data paths in scripts
-   - Ensure datasets are downloaded to correct locations
-
-3. **Poor Performance**
-   - Verify DINOv3 checkpoint is loaded correctly
-   - Check data preprocessing and augmentation
-   - Compare with reference implementation in `raw_code/`
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@misc{dino_daga_2024,
-  title={Dynamic Attention-Gated Adapter for DINOv3 Multi-Task Fine-tuning},
-  author={Your Name},
-  year={2024}
-}
+```bash
+./scripts/run_classification.sh 0,1,2,3  # 使用GPU 0-3
 ```
 
-## License
+## 输出结果
 
-This project is licensed under the MIT License.
+训练结果保存在 `outputs/` 目录下：
+- `outputs/classification/` - 分类结果和可视化
+- `outputs/detection/` - 检测结果和可视化
+- `outputs/segmentation/` - 分割结果和可视化
 
-## Acknowledgments
+## 关键改进
 
-- DINOv3 for the pretrained vision transformer models
-- SwanLab for experiment tracking and visualization
+### 分类任务
+- 使用 **CLS token + patch tokens mean** 作为特征（与DINOv3官方一致）
+- 改进的线性分类头初始化
+
+### 检测任务
+- 完整的mAP计算
+- 改进的检测头架构
+- 优化的学习率策略
+
+### 分割任务
+- 多尺度特征融合
+- 改进的分割头（包含BatchNorm和Dropout）
+- Label smoothing正则化
+
+## DAGA插件
+
+DAGA模块动态适配特征：
+1. **Attention Encoder**: 从注意力图提取指导信息
+2. **Gate Generator**: 生成动态门控
+3. **Feature Transformer**: 特征变换
+4. **Adaptive Mixing**: 自适应混合原始和变换后的特征
+
+## 注意事项
+
+- 测试使用10-15%数据集以快速验证
+- 完整训练需要增加epochs和数据比例
+- 建议batch size根据GPU内存调整
+- DINOv3性能较好，如果结果很差请检查数据路径和模型加载
+
+## 依赖
+
+- PyTorch
+- torchvision
+- numpy
+- matplotlib
+- tqdm
+- swanlab (用于实验记录)
+- pycocotools (用于COCO数据集)

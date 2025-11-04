@@ -108,7 +108,15 @@ class ClassificationModel(nn.Module):
                 x_processed = torch.cat([cls_token, register_tokens, adapted_patch_tokens], dim=1)
         
         x_normalized = self.vit.norm(x_processed)
-        features = x_normalized[:, 0]
+        
+        # Extract features: CLS token + mean of patch tokens (similar to DINOv3 official implementation)
+        cls_token = x_normalized[:, 0]  # (B, C)
+        patch_start_index = 1 + num_registers
+        patch_tokens = x_normalized[:, patch_start_index:, :]  # (B, num_patches, C)
+        patch_mean = patch_tokens.mean(dim=1)  # (B, C)
+        
+        # Concatenate CLS and patch mean
+        features = torch.cat([cls_token, patch_mean], dim=1)  # (B, 2*C)
         logits = self.classifier(features)
         
         return logits, adapted_attn_weights, daga_guidance_map

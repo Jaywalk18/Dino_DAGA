@@ -125,15 +125,17 @@ def setup_training_components(model, args):
             else:
                 head_params.append(param)
     
-    lr_scaled = args.lr * (args.batch_size * torch.cuda.device_count()) / 256.0
+    # Better learning rate scaling for detection
+    lr_scaled = args.lr * (args.batch_size * torch.cuda.device_count()) / 16.0
     
+    # Use different learning rates and weight decay for different parts
     param_groups = [{"params": head_params, "lr": lr_scaled, "weight_decay": args.weight_decay}]
     if daga_params:
         param_groups.append(
-            {"params": daga_params, "lr": lr_scaled * 0.5, "weight_decay": args.weight_decay}
+            {"params": daga_params, "lr": lr_scaled * 0.5, "weight_decay": args.weight_decay * 0.5}
         )
     
-    optimizer = torch.optim.AdamW(param_groups)
+    optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999), eps=1e-8)
     
     warmup_epochs = 1
     
@@ -199,8 +201,14 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
             
             # Assign positive samples based on centers
             for i in range(len(boxes)):
-                cx_int = int(cx[i].clamp(0, W-1))
-                cy_int = int(cy[i].clamp(0, H-1))
+                # Validate label FIRST (on CPU to avoid CUDA errors)
+                label_i = int(labels[i].cpu().item())
+                if label_i < 0 or label_i >= num_classes:
+                    print(f"Warning: Invalid label {label_i} (num_classes={num_classes}), skipping")
+                    continue
+                
+                cx_int = int(cx[i].clamp(0, W-1).cpu().item())
+                cy_int = int(cy[i].clamp(0, H-1).cpu().item())
                 
                 # Use first anchor for simplicity
                 anchor_idx = 0
@@ -210,9 +218,19 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
                 num_pos_samples += 1
                 
                 # Simple classification loss at center
+                label_tensor = labels[i:i+1]
+                pred_logits = cls_pred[b, anchor_idx, :, cy_int, cx_int].unsqueeze(0)
+                
+                # Debug: print shapes and values
+                if label_i >= num_classes or label_i < 0:
+                    print(f"FATAL: Label {label_i} out of range [0, {num_classes})")
+                    print(f"  Prediction shape: {pred_logits.shape}")
+                    print(f"  Label tensor: {label_tensor}")
+                    continue
+                
                 total_cls_loss += F.cross_entropy(
-                    cls_pred[b, anchor_idx, :, cy_int, cx_int].unsqueeze(0),
-                    labels[i:i+1],
+                    pred_logits,
+                    label_tensor,
                     reduction='sum'
                 )
                 
@@ -271,25 +289,256 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
     return total_loss / len(dataloader)
 
 
+def compute_iou(box1, box2):
+    """Compute IoU between two boxes (x1,y1,x2,y2 format)"""
+    x1_min, y1_min, x1_max, y1_max = box1
+    x2_min, y2_min, x2_max, y2_max = box2
+    
+    # Intersection
+    inter_x_min = max(x1_min, x2_min)
+    inter_y_min = max(y1_min, y2_min)
+    inter_x_max = min(x1_max, x2_max)
+    inter_y_max = min(y1_max, y2_max)
+    
+    inter_w = max(0, inter_x_max - inter_x_min)
+    inter_h = max(0, inter_y_max - inter_y_min)
+    inter_area = inter_w * inter_h
+    
+    # Union
+    box1_area = (x1_max - x1_min) * (y1_max - y1_min)
+    box2_area = (x2_max - x2_min) * (y2_max - y2_min)
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / (union_area + 1e-6)
+
+
+def decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.05, nms_threshold=0.5):
+    """
+    Decode predictions from network outputs to bounding boxes.
+    
+    Args:
+        cls_pred: (B, num_anchors * num_classes, H, W)
+        bbox_pred: (B, num_anchors * 4, H, W)
+        obj_pred: (B, num_anchors, H, W)
+        conf_threshold: confidence threshold for filtering
+        nms_threshold: IoU threshold for NMS
+    
+    Returns:
+        List of (boxes, scores, labels) for each image in batch
+    """
+    batch_size = cls_pred.size(0)
+    num_anchors = 3
+    num_classes = cls_pred.size(1) // num_anchors
+    H, W = cls_pred.size(2), cls_pred.size(3)
+    
+    # Reshape
+    cls_pred = cls_pred.view(batch_size, num_anchors, num_classes, H, W)
+    bbox_pred = bbox_pred.view(batch_size, num_anchors, 4, H, W)
+    obj_pred = obj_pred.view(batch_size, num_anchors, H, W)
+    
+    results = []
+    
+    for b in range(batch_size):
+        boxes_batch = []
+        scores_batch = []
+        labels_batch = []
+        
+        # Get objectness scores
+        obj_scores = torch.sigmoid(obj_pred[b])  # (num_anchors, H, W)
+        
+        # Process each anchor
+        for anchor_idx in range(num_anchors):
+            obj_map = obj_scores[anchor_idx]  # (H, W)
+            
+            # Find high-confidence locations
+            conf_mask = obj_map > conf_threshold
+            if conf_mask.sum() == 0:
+                continue
+            
+            # Get coordinates where confidence is high
+            y_coords, x_coords = torch.where(conf_mask)
+            
+            for y, x in zip(y_coords, x_coords):
+                # Get class prediction
+                class_logits = cls_pred[b, anchor_idx, :, y, x]
+                class_probs = torch.softmax(class_logits, dim=0)
+                max_prob, pred_class = class_probs.max(dim=0)
+                
+                # Combined confidence
+                conf = obj_map[y, x] * max_prob
+                
+                if conf < conf_threshold:
+                    continue
+                
+                # Get bbox (already in normalized coordinates)
+                bbox = bbox_pred[b, anchor_idx, :, y, x]
+                bbox = torch.clamp(bbox, 0, 1)
+                
+                boxes_batch.append(bbox.cpu())
+                scores_batch.append(conf.cpu().item())
+                labels_batch.append(pred_class.cpu().item())
+        
+        # Simple NMS
+        if len(boxes_batch) > 0:
+            boxes_tensor = torch.stack(boxes_batch)
+            keep_indices = simple_nms(boxes_tensor, scores_batch, nms_threshold)
+            
+            boxes_batch = [boxes_batch[i] for i in keep_indices]
+            scores_batch = [scores_batch[i] for i in keep_indices]
+            labels_batch = [labels_batch[i] for i in keep_indices]
+        
+        results.append((boxes_batch, scores_batch, labels_batch))
+    
+    return results
+
+
+def simple_nms(boxes, scores, threshold):
+    """Simple NMS implementation"""
+    if len(boxes) == 0:
+        return []
+    
+    # Sort by scores
+    sorted_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+    keep = []
+    
+    while sorted_indices:
+        current = sorted_indices[0]
+        keep.append(current)
+        sorted_indices = sorted_indices[1:]
+        
+        if not sorted_indices:
+            break
+        
+        # Remove overlapping boxes
+        current_box = boxes[current]
+        new_indices = []
+        
+        for idx in sorted_indices:
+            iou = compute_iou(current_box, boxes[idx])
+            if iou < threshold:
+                new_indices.append(idx)
+        
+        sorted_indices = new_indices
+    
+    return keep
+
+
+def compute_detection_metrics(pred_boxes_list, pred_labels_list, gt_boxes_list, gt_labels_list, iou_threshold=0.5):
+    """
+    Compute detection metrics (mAP-like metric).
+    
+    Args:
+        pred_boxes_list: List of predicted boxes per image (each is list of tensors)
+        pred_labels_list: List of predicted labels per image (each is list of ints)
+        gt_boxes_list: List of GT boxes per image (each is tensor)
+        gt_labels_list: List of GT labels per image (each is tensor)
+        iou_threshold: IoU threshold for considering a detection as correct
+    
+    Returns:
+        Dictionary with precision, recall, f1, and mAP-like score
+    """
+    total_tp = 0
+    total_fp = 0
+    total_gt = 0
+    
+    for pred_boxes, pred_labels, gt_boxes, gt_labels in zip(
+        pred_boxes_list, pred_labels_list, gt_boxes_list, gt_labels_list
+    ):
+        if len(gt_boxes) == 0:
+            total_fp += len(pred_boxes)
+            continue
+        
+        total_gt += len(gt_boxes)
+        
+        if len(pred_boxes) == 0:
+            continue
+        
+        # Track which GT boxes have been matched
+        gt_matched = [False] * len(gt_boxes)
+        
+        # For each prediction
+        for pred_box, pred_label in zip(pred_boxes, pred_labels):
+            best_iou = 0
+            best_gt_idx = -1
+            
+            # Find best matching GT box with same label
+            for gt_idx, (gt_box, gt_label) in enumerate(zip(gt_boxes, gt_labels)):
+                if gt_matched[gt_idx]:
+                    continue
+                
+                if pred_label == gt_label.item():
+                    iou = compute_iou(pred_box, gt_box)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_gt_idx = gt_idx
+            
+            # Check if it's a true positive
+            if best_iou >= iou_threshold and best_gt_idx >= 0:
+                total_tp += 1
+                gt_matched[best_gt_idx] = True
+            else:
+                total_fp += 1
+    
+    # Compute metrics
+    precision = total_tp / (total_tp + total_fp + 1e-6)
+    recall = total_tp / (total_gt + 1e-6)
+    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+    
+    # mAP-like score (simplified)
+    map_score = (precision + recall) / 2
+    
+    return {
+        'precision': precision * 100,  # Convert to percentage
+        'recall': recall * 100,
+        'f1': f1 * 100,
+        'mAP': map_score * 100,
+        'tp': total_tp,
+        'fp': total_fp,
+        'total_gt': total_gt
+    }
+
+
 def evaluate(model, dataloader, device):
-    """Evaluate detection model (simplified)"""
+    """Evaluate detection model with loss and mAP metrics"""
     model.eval()
     total_loss = 0.0
+    
+    all_pred_boxes = []
+    all_pred_labels = []
+    all_gt_boxes = []
+    all_gt_labels = []
     
     with torch.no_grad():
         for images, boxes_list, labels_list in tqdm(dataloader, desc="Evaluating"):
             images = images.to(device)
-            # Move boxes and labels to device
             boxes_list = [boxes.to(device) for boxes in boxes_list]
             labels_list = [labels.to(device) for labels in labels_list]
             
-            # Call with positional argument to avoid DataParallel kwargs issue
             cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
             
+            # Compute loss
             loss = detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list)
             total_loss += loss.item()
+            
+            # Decode predictions for metrics
+            decoded = decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.05)
+            
+            for (pred_boxes, pred_scores, pred_labels), gt_boxes, gt_labels in zip(
+                decoded, boxes_list, labels_list
+            ):
+                all_pred_boxes.append(pred_boxes)
+                all_pred_labels.append(pred_labels)
+                all_gt_boxes.append(gt_boxes.cpu())
+                all_gt_labels.append(gt_labels.cpu())
     
-    return total_loss / len(dataloader)
+    # Compute metrics
+    avg_loss = total_loss / len(dataloader)
+    metrics = compute_detection_metrics(
+        all_pred_boxes, all_pred_labels, all_gt_boxes, all_gt_labels
+    )
+    metrics['loss'] = avg_loss
+    
+    return metrics
 
 
 def visualize_detection_results(
@@ -472,23 +721,30 @@ def run_training_loop(
 ):
     """Execute main training and evaluation loop"""
     best_loss = float('inf')
-    val_loss = float('inf')  # Initialize val_loss
+    best_map = 0.0
+    val_metrics = {'loss': float('inf')}
     start_time = time.time()
     
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, device, epoch)
-        val_loss = evaluate(model, val_loader, device)
+        val_metrics = evaluate(model, val_loader, device)
         scheduler.step()
         
         elapsed_time = time.time() - start_time
         print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
-        print(f"   Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print(f"   Train Loss: {train_loss:.4f} | Val Loss: {val_metrics['loss']:.4f}")
+        print(f"   mAP: {val_metrics['mAP']:.2f}% | Precision: {val_metrics['precision']:.2f}% | Recall: {val_metrics['recall']:.2f}%")
+        print(f"   TP: {val_metrics['tp']} | FP: {val_metrics['fp']} | GT: {val_metrics['total_gt']}")
         print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
         
         log_dict = {
             "epoch": epoch + 1,
             "train_loss": train_loss,
-            "val_loss": val_loss,
+            "val_loss": val_metrics['loss'],
+            "val_mAP": val_metrics['mAP'],
+            "val_precision": val_metrics['precision'],
+            "val_recall": val_metrics['recall'],
+            "val_f1": val_metrics['f1'],
             "learning_rate": optimizer.param_groups[0]["lr"],
             "total_time_minutes": elapsed_time / 60,
         }
@@ -507,8 +763,10 @@ def run_training_loop(
         
         swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
         
-        if val_loss < best_loss:
-            best_loss = val_loss
+        # Save best model based on mAP
+        if val_metrics['mAP'] > best_map:
+            best_map = val_metrics['mAP']
+            best_loss = val_metrics['loss']
             save_path = output_dir / "best_model.pth"
             from core.utils import save_checkpoint
             save_checkpoint(
@@ -519,6 +777,6 @@ def run_training_loop(
                 args,
                 save_path,
             )
-            print(f"   ✅ New best model saved! (Val Loss: {best_loss:.4f})")
+            print(f"   ✅ New best model saved! (mAP: {best_map:.2f}%, Loss: {best_loss:.4f})")
     
-    return best_loss, val_loss, (time.time() - start_time) / 60
+    return best_loss, val_metrics, (time.time() - start_time) / 60

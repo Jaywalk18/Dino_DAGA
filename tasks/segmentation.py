@@ -127,7 +127,8 @@ class SegmentationModel(nn.Module):
 
 def setup_training_components(model, args):
     """Setup criterion, optimizer, scheduler for segmentation"""
-    criterion = nn.CrossEntropyLoss(ignore_index=255)
+    # Use label smoothing for better generalization
+    criterion = nn.CrossEntropyLoss(ignore_index=255, label_smoothing=0.1)
     
     base_model = model.module if isinstance(model, DataParallel) else model
     
@@ -141,15 +142,17 @@ def setup_training_components(model, args):
             else:
                 head_params.append(param)
     
-    lr_scaled = args.lr * (args.batch_size * torch.cuda.device_count()) / 256.0
+    # Better learning rate scaling
+    lr_scaled = args.lr * (args.batch_size * torch.cuda.device_count()) / 16.0
     
+    # Use different learning rates for different parts
     param_groups = [{"params": head_params, "lr": lr_scaled, "weight_decay": args.weight_decay}]
     if daga_params:
         param_groups.append(
-            {"params": daga_params, "lr": lr_scaled * 0.5, "weight_decay": args.weight_decay}
+            {"params": daga_params, "lr": lr_scaled * 0.5, "weight_decay": args.weight_decay * 0.5}
         )
     
-    optimizer = torch.optim.AdamW(param_groups)
+    optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999), eps=1e-8)
     
     warmup_epochs = 1
     

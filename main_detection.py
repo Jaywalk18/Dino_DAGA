@@ -164,7 +164,7 @@ def main():
     print("Starting training...")
     print(f"{'='*70}\n")
     
-    best_loss, final_loss, total_time = run_training_loop(
+    best_loss, final_metrics, total_time = run_training_loop(
         model,
         train_loader,
         val_loader,
@@ -180,7 +180,10 @@ def main():
     print(f'\n{"="*70}\n🎉 Training Completed!\n{"="*70}')
     print(f"Total Time:       {total_time:.1f} minutes")
     print(f"Best Val Loss:    {best_loss:.4f}")
-    print(f"Final Val Loss:   {final_loss:.4f}")
+    print(f"Final Val Loss:   {final_metrics['loss']:.4f}")
+    print(f"Final mAP:        {final_metrics['mAP']:.2f}%")
+    print(f"Final Precision:  {final_metrics['precision']:.2f}%")
+    print(f"Final Recall:     {final_metrics['recall']:.2f}%")
     print(f"Results saved to: {output_dir}\n{'='*70}\n")
     
     if args.enable_swanlab:
