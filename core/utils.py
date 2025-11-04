@@ -49,11 +49,17 @@ def setup_logging(args, task_name="classification"):
     enable_swanlab = getattr(args, 'enable_swanlab', True)
     
     if enable_swanlab:
-        swanlab.init(
-            project=f"dino-{task_name}_{date.today()}",
-            experiment_name=exp_name,
-            config=vars(args),
-        )
+        try:
+            swanlab.init(
+                project=f"dino-{task_name}_{date.today()}",
+                experiment_name=exp_name,
+                config=vars(args),
+                mode="local",  # Use local mode to avoid network issues
+            )
+        except Exception as e:
+            print(f"⚠️  Warning: SwanLab initialization failed: {e}")
+            print("   Continuing without SwanLab logging...")
+            args.enable_swanlab = False
     return exp_name
 
 

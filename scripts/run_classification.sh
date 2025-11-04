@@ -28,9 +28,9 @@ CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 DINOV3_MODEL="dinov3_vits16"
 PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 
-# Common parameters
+# Common parameters (aligned with raw_code successful baseline)
 SEED=42
-INPUT_SIZE=224
+INPUT_SIZE=224  # Raw code uses 224, not 518
 
 cd $PROJECT_ROOT
 export PYTHONPATH=$PYTHONPATH:$(pwd)
@@ -50,17 +50,17 @@ echo ""
 
 run_experiment() {
     local exp_name=$1
-    local dataset=$2
-    local data_path=$3
-    local epochs=$4
-    local batch_size=$5
-    local lr=$6
-    local use_daga=$7
-    local daga_layers=$8
-    local subset_ratio=$9
-    local swanlab_name=${10}
+    local description=$2
+    local dataset=$3
+    local data_path=$4
+    local epochs=$5
+    local batch_size=$6
+    local lr=$7
+    local use_daga=$8
+    local daga_layers=$9
+    local subset_ratio=${10}
     
-    echo "▶️  Running: $exp_name"
+    echo "▶️  Running: $description"
     echo "─────────────────────────────────────────────────────────────────────"
     
     local daga_args=""
@@ -86,15 +86,15 @@ run_experiment() {
         $daga_args \
         $subset_args \
         --output_dir ./outputs/classification \
-        --swanlab_name "$swanlab_name" \
+        --swanlab_name "${dataset}_${exp_name}" \
         --enable_visualization \
         --log_freq 5 \
         --vis_indices 0 1 2 3
     
     if [ $? -eq 0 ]; then
-        echo "✅  SUCCESS: $exp_name"
+        echo "✅  SUCCESS: $description"
     else
-        echo "❌  FAILED: $exp_name"
+        echo "❌  FAILED: $description"
         exit 1
     fi
     echo ""
@@ -110,6 +110,7 @@ if [ "$MODE" = "test" ]; then
     
     # CIFAR-100 Baseline
     run_experiment \
+        "test_cifar100_baseline" \
         "CIFAR-100 Baseline (Test)" \
         "cifar100" \
         "${DATA_ROOT}/cifar" \
@@ -118,11 +119,11 @@ if [ "$MODE" = "test" ]; then
         4e-3 \
         "false" \
         "" \
-        0.01 \
-        "test_cifar100_baseline"
+        0.01
     
     # CIFAR-100 with DAGA
     run_experiment \
+        "test_cifar100_daga_L11" \
         "CIFAR-100 with DAGA (Test)" \
         "cifar100" \
         "${DATA_ROOT}/cifar" \
@@ -131,8 +132,7 @@ if [ "$MODE" = "test" ]; then
         4e-3 \
         "true" \
         "11" \
-        0.01 \
-        "test_cifar100_daga_L11"
+        0.01
     
     echo "========================================================================"
     echo "✅ QUICK TEST COMPLETED!"
@@ -159,7 +159,8 @@ else
     
     # CIFAR-100 Baseline
     run_experiment \
-        "CIFAR-100 Baseline" \
+        "01_baseline" \
+        "CIFAR-100 Baseline (Linear Probe)" \
         "cifar100" \
         "${DATA_ROOT}/cifar" \
         20 \
@@ -167,11 +168,11 @@ else
         4e-3 \
         "false" \
         "" \
-        1.0 \
-        "cifar100_baseline"
+        1.0
     
     # CIFAR-100 with DAGA (single layer)
     run_experiment \
+        "02_daga_last_layer" \
         "CIFAR-100 with DAGA (L11)" \
         "cifar100" \
         "${DATA_ROOT}/cifar" \
@@ -180,11 +181,11 @@ else
         4e-3 \
         "true" \
         "11" \
-        1.0 \
-        "cifar100_daga_L11"
+        1.0
     
     # CIFAR-100 with DAGA (hourglass)
     run_experiment \
+        "03_daga_hourglass" \
         "CIFAR-100 with DAGA (Hourglass)" \
         "cifar100" \
         "${DATA_ROOT}/cifar" \
@@ -193,8 +194,7 @@ else
         4e-3 \
         "true" \
         "1 2 10 11" \
-        1.0 \
-        "cifar100_daga_hourglass"
+        1.0
     
     # ------------------------------------------------------------------------
     # ImageNet Experiments (optional - only if ImageNet is available)
@@ -209,6 +209,7 @@ else
         
         # ImageNet Baseline (10% subset for faster training)
         run_experiment \
+            "04_imagenet_baseline_subset" \
             "ImageNet Baseline (10% subset)" \
             "imagenet" \
             "${DATA_ROOT}/imagenet" \
@@ -217,11 +218,11 @@ else
             5e-5 \
             "false" \
             "" \
-            0.1 \
-            "imagenet_baseline_subset0.1"
+            0.1
         
         # ImageNet with DAGA
         run_experiment \
+            "05_imagenet_daga_subset" \
             "ImageNet with DAGA (10% subset)" \
             "imagenet" \
             "${DATA_ROOT}/imagenet" \
@@ -230,8 +231,7 @@ else
             5e-5 \
             "true" \
             "11" \
-            0.1 \
-            "imagenet_daga_L11_subset0.1"
+            0.1
     else
         echo "⚠️  ImageNet dataset not found at ${DATA_ROOT}/imagenet, skipping ImageNet experiments"
     fi

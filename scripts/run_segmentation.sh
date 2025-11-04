@@ -47,19 +47,19 @@ CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 DINOV3_MODEL="dinov3_vits16"
 PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 
-# Training hyperparameters
+# Training hyperparameters (aligned with segmentation standards)
 if [ "$MODE" = "test" ]; then
     EPOCHS=1
     BATCH_SIZE=16
     LR=1e-4
 else
-    EPOCHS=20
+    EPOCHS=40  # Segmentation typically needs more epochs
     BATCH_SIZE=16
     LR=1e-4
 fi
 
 SEED=42
-INPUT_SIZE=518
+INPUT_SIZE=518  # Segmentation uses larger input size for better detail
 BASE_OUTPUT_DIR="outputs/segmentation"
 
 # =============================================================================
@@ -139,20 +139,20 @@ run_experiment() {
 # Experiment Runs
 # =============================================================================
 
-# run_experiment \
-#     "01_ade20k_baseline" \
-#     "Baseline (Semantic Segmentation on ADE20K)"
+run_experiment \
+    "01_baseline" \
+    "Baseline (Linear Segmentation Head on DINOv3)"
 
 run_experiment \
-    "02_ade20k_daga_last_layer" \
+    "02_daga_last_layer" \
     "DAGA Single Layer (L11)" \
     --use_daga \
     --daga_layers 11
 
 # Uncomment for multi-layer DAGA experiments
 # run_experiment \
-#     "03_ade20k_daga_hourglass" \
-#     "DAGA Hourglass Distribution" \
+#     "03_daga_hourglass" \
+#     "DAGA Hourglass Distribution (L1,2,10,11)" \
 #     --use_daga \
 #     --daga_layers 1 2 10 11
 

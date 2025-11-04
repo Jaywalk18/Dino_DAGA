@@ -96,26 +96,50 @@ class ADE20KDataset(Dataset):
 
     def __len__(self):
         return len(self.img_files)
+    
+    def _validate_samples(self, num_samples=3):
+        """Validate a few samples to check mask value ranges"""
+        print(f"Validating {num_samples} samples...")
+        for i in range(num_samples):
+            img_path = self.img_files[i]
+            mask_base = img_path.replace('.jpg', '')
+            mask_path = os.path.join(mask_base, f"{os.path.basename(mask_base)}_seg.png")
+            if os.path.exists(mask_path):
+                mask = np.array(Image.open(mask_path), dtype=np.int64)
+                unique_vals = np.unique(mask)
+                print(f"  Sample {i}: mask values in range [{unique_vals.min()}, {unique_vals.max()}]")
+                if unique_vals.max() > 150:
+                    print(f"    Warning: Found value {unique_vals.max()} > 150")
+            else:
+                print(f"  Sample {i}: mask not found at {mask_path}")
 
     def __getitem__(self, idx):
         # Image path is already absolute from os.walk
         img_path = self.img_files[idx]
         image = Image.open(img_path).convert('RGB')
         
-        # Load mask (annotation) - same path but without .jpg extension
-        # ADE20K has folder with same name as image base
-        mask_base = img_path.replace('.jpg', '')
-        mask_path = os.path.join(mask_base, f"{os.path.basename(mask_base)}_seg.png")
+        # Load mask (annotation) - _seg.png is in the same directory as .jpg, not in subfolder
+        # Example: /path/to/ADE_val_00000749.jpg -> /path/to/ADE_val_00000749_seg.png
+        mask_path = img_path.replace('.jpg', '_seg.png')
         
         if os.path.exists(mask_path):
-            mask = Image.open(mask_path)
-            # Convert to numpy array
-            mask = np.array(mask, dtype=np.int64)
-            # ADE20K masks are 0-indexed for background, 1-150 for classes
-            # Keep as is for now
+            mask_img = Image.open(mask_path)
+            # ADE20K masks are stored as RGB images, class index is in R channel
+            mask_arr = np.array(mask_img, dtype=np.int64)
+            if len(mask_arr.shape) == 3:  # RGB format
+                mask = mask_arr[:, :, 0]  # Use R channel
+            else:
+                mask = mask_arr
+            
+            # ADE20K: 0 is background/unlabeled, 1-150 are object classes
+            # Convert to: 255 is ignore (background), 0-149 are classes
+            mask = mask.copy()
+            mask[mask == 0] = 255  # Background becomes ignore index
+            mask[mask != 255] -= 1  # Shift 1-150 to 0-149
         else:
-            # If no mask found, create empty mask
-            mask = np.zeros((image.size[1], image.size[0]), dtype=np.int64)
+            # If no mask found, create empty mask with ignore index
+            print(f"Warning: Mask not found at {mask_path}")
+            mask = np.full((image.size[1], image.size[0]), 255, dtype=np.int64)
         
         # Apply transforms
         if self.transform:

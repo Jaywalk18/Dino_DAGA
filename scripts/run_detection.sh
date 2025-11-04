@@ -47,19 +47,19 @@ CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 DINOV3_MODEL="dinov3_vits16"
 PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 
-# Training hyperparameters
+# Training hyperparameters (aligned with COCO detection standards)
 if [ "$MODE" = "test" ]; then
     EPOCHS=1
     BATCH_SIZE=16
     LR=1e-4
 else
-    EPOCHS=10
+    EPOCHS=12  # Aligned with typical detection training
     BATCH_SIZE=16
     LR=1e-4
 fi
 
 SEED=42
-INPUT_SIZE=518
+INPUT_SIZE=518  # Detection typically uses larger input size
 BASE_OUTPUT_DIR="outputs/detection"
 
 # =============================================================================
@@ -139,19 +139,19 @@ run_experiment() {
 # =============================================================================
 
 run_experiment \
-    "01_coco_baseline" \
-    "Baseline (Object Detection on COCO)"
+    "01_baseline" \
+    "Baseline (Linear Detection Head on DINOv3)"
 
 run_experiment \
-    "02_coco_daga_last_layer" \
+    "02_daga_last_layer" \
     "DAGA Single Layer (L11)" \
     --use_daga \
     --daga_layers 11
 
 # Uncomment for multi-layer DAGA experiments
 # run_experiment \
-#     "03_coco_daga_hourglass" \
-#     "DAGA Hourglass Distribution" \
+#     "03_daga_hourglass" \
+#     "DAGA Hourglass Distribution (L1,2,10,11)" \
 #     --use_daga \
 #     --daga_layers 1 2 10 11
 

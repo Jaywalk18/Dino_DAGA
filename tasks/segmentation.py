@@ -331,15 +331,23 @@ def visualize_segmentation_results(
             axes1[0].set_title("Original Image")
             axes1[0].axis("off")
             
-            axes1[1].imshow(masks_np[j], cmap='tab20')
+            # Create a colormap for 150 classes
+            # Use nipy_spectral which has better color distribution
+            gt_mask_vis = masks_np[j].copy()
+            # Mask out ignore regions (255) in black
+            gt_mask_display = np.ma.masked_where(gt_mask_vis == 255, gt_mask_vis)
+            im1 = axes1[1].imshow(gt_mask_display, cmap='nipy_spectral', vmin=0, vmax=149, interpolation='nearest')
             axes1[1].set_title("Ground Truth")
             axes1[1].axis("off")
             
-            axes1[2].imshow(preds_np[j], cmap='tab20')
+            # Visualize prediction mask
+            pred_mask_vis = preds_np[j].copy()
+            pred_mask_vis = np.clip(pred_mask_vis, 0, 149)  # Ensure valid range
+            im2 = axes1[2].imshow(pred_mask_vis, cmap='nipy_spectral', vmin=0, vmax=149, interpolation='nearest')
             axes1[2].set_title("Prediction")
             axes1[2].axis("off")
             
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            plt.tight_layout()
             vis_figs.append(fig1)
             
             fig1.savefig(
@@ -361,7 +369,7 @@ def visualize_segmentation_results(
                 axes2[1].set_title("Adapted Model Attn")
                 axes2[1].axis("off")
                 
-                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                plt.tight_layout()
                 vis_figs.append(fig2)
                 
                 fig2.savefig(
@@ -403,6 +411,7 @@ def run_training_loop(
 ):
     """Execute main training and evaluation loop"""
     best_miou = 0.0
+    val_miou = 0.0  # Initialize val_miou
     start_time = time.time()
     
     for epoch in range(args.epochs):

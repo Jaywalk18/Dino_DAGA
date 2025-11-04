@@ -80,8 +80,29 @@ class COCODetectionDataset(Dataset):
         self.transform = transform
         self.input_size = input_size
         
+        # Create mapping from COCO category IDs to continuous indices (0-79)
+        self.coco_cat_ids = sorted(self.coco.getCatIds())
+        self.cat_id_to_idx = {cat_id: idx for idx, cat_id in enumerate(self.coco_cat_ids)}
+        
         # Filter out images without annotations
         self.ids = [img_id for img_id in self.ids if len(self.coco.getAnnIds(imgIds=img_id)) > 0]
+        
+        print(f"Found {len(self.ids)} images with annotations")
+        print(f"COCO categories: {len(self.coco_cat_ids)} classes (remapped to 0-{len(self.coco_cat_ids)-1})")
+        
+        # Validate a few samples
+        if len(self.ids) > 0:
+            self._validate_samples(min(3, len(self.ids)))
+    
+    def _validate_samples(self, num_samples=3):
+        """Validate a few samples to check bbox ranges"""
+        print(f"Validating {num_samples} detection samples...")
+        for i in range(num_samples):
+            img_id = self.ids[i]
+            ann_ids = self.coco.getAnnIds(imgIds=img_id)
+            anns = self.coco.loadAnns(ann_ids)
+            num_boxes = len([ann for ann in anns if 'bbox' in ann and ann['area'] > 0])
+            print(f"  Sample {i} (img_id={img_id}): {num_boxes} valid boxes")
 
     def __len__(self):
         return len(self.ids)
@@ -111,18 +132,20 @@ class COCODetectionDataset(Dataset):
                 x, y, w, h = ann['bbox']
                 # Convert to [x1, y1, x2, y2] format
                 boxes.append([x, y, x + w, y + h])
-                labels.append(ann['category_id'])
+                # Convert COCO category ID to continuous index (0-79)
+                labels.append(self.cat_id_to_idx[ann['category_id']])
         
         # Convert to tensors
         if len(boxes) > 0:
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
             labels = torch.as_tensor(labels, dtype=torch.int64)
             
-            # Scale boxes to match resized image
-            scale_x = self.input_size / orig_w
-            scale_y = self.input_size / orig_h
-            boxes[:, [0, 2]] *= scale_x
-            boxes[:, [1, 3]] *= scale_y
+            # Normalize boxes to [0, 1] range
+            boxes[:, [0, 2]] /= orig_w
+            boxes[:, [1, 3]] /= orig_h
+            
+            # Clamp to valid range
+            boxes = torch.clamp(boxes, 0.0, 1.0)
         else:
             boxes = torch.zeros((0, 4), dtype=torch.float32)
             labels = torch.zeros((0,), dtype=torch.int64)

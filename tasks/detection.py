@@ -153,25 +153,92 @@ def setup_training_components(model, args):
 
 
 def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
-    """Simplified detection loss (placeholder for real YOLO/FCOS loss)"""
-    batch_size = len(boxes_list)
+    """
+    Simplified detection loss with classification, bbox regression, and objectness.
+    Uses a simple center-based assignment strategy.
     
-    total_loss = 0.0
+    Args:
+        cls_pred: (B, num_anchors * num_classes, H, W) - class predictions
+        bbox_pred: (B, num_anchors * 4, H, W) - bbox predictions (x1, y1, x2, y2 normalized)
+        obj_pred: (B, num_anchors, H, W) - objectness predictions
+        boxes_list: list of (N, 4) tensors - GT boxes per image (normalized)
+        labels_list: list of (N,) tensors - GT labels per image
+    """
+    device = cls_pred.device
+    batch_size = cls_pred.size(0)
+    num_anchors = 3  # From DetectionHead
+    num_classes = cls_pred.size(1) // num_anchors
+    H, W = cls_pred.size(2), cls_pred.size(3)
+    
+    # Reshape predictions to separate anchors
+    cls_pred = cls_pred.view(batch_size, num_anchors, num_classes, H, W)
+    bbox_pred = bbox_pred.view(batch_size, num_anchors, 4, H, W)
+    obj_pred = obj_pred.view(batch_size, num_anchors, H, W)
+    
+    total_cls_loss = 0.0
+    total_bbox_loss = 0.0
+    total_obj_loss = 0.0
+    num_pos_samples = 0
+    
     for b in range(batch_size):
-        if len(boxes_list[b]) > 0:
-            obj_loss = F.binary_cross_entropy_with_logits(
-                obj_pred[b].mean().unsqueeze(0), 
-                torch.ones(1, device=obj_pred.device) * 0.5
-            )
-            total_loss += obj_loss
-        else:
-            obj_loss = F.binary_cross_entropy_with_logits(
-                obj_pred[b].mean().unsqueeze(0), 
-                torch.zeros(1, device=obj_pred.device)
-            )
-            total_loss += obj_loss
+        boxes = boxes_list[b]  # (N, 4) normalized boxes
+        labels = labels_list[b]  # (N,)
+        
+        # Create objectness target map
+        obj_target = torch.zeros(num_anchors, H, W, device=device)
+        
+        if len(boxes) > 0:
+            # Convert normalized boxes to feature map coordinates
+            boxes_fm = boxes.clone()
+            boxes_fm[:, [0, 2]] *= W
+            boxes_fm[:, [1, 3]] *= H
+            
+            # Get box centers
+            cx = (boxes_fm[:, 0] + boxes_fm[:, 2]) / 2
+            cy = (boxes_fm[:, 1] + boxes_fm[:, 3]) / 2
+            
+            # Assign positive samples based on centers
+            for i in range(len(boxes)):
+                cx_int = int(cx[i].clamp(0, W-1))
+                cy_int = int(cy[i].clamp(0, H-1))
+                
+                # Use first anchor for simplicity
+                anchor_idx = 0
+                
+                # Mark center location as positive
+                obj_target[anchor_idx, cy_int, cx_int] = 1.0
+                num_pos_samples += 1
+                
+                # Simple classification loss at center
+                total_cls_loss += F.cross_entropy(
+                    cls_pred[b, anchor_idx, :, cy_int, cx_int].unsqueeze(0),
+                    labels[i:i+1],
+                    reduction='sum'
+                )
+                
+                # Bbox regression loss (L1 loss)
+                pred_box = bbox_pred[b, anchor_idx, :, cy_int, cx_int]  # (4,)
+                total_bbox_loss += F.l1_loss(pred_box, boxes[i], reduction='sum')
+        
+        # Objectness loss (BCE with logits)
+        total_obj_loss += F.binary_cross_entropy_with_logits(
+            obj_pred[b],
+            obj_target,
+            reduction='sum'
+        )
     
-    return total_loss / batch_size
+    # Normalize losses
+    num_pos_samples = max(num_pos_samples, 1)  # Avoid division by zero
+    total_pixels = batch_size * num_anchors * H * W
+    
+    cls_loss = total_cls_loss / num_pos_samples
+    bbox_loss = total_bbox_loss / num_pos_samples
+    obj_loss = total_obj_loss / total_pixels
+    
+    # Combine losses with weights
+    loss = cls_loss + 2.0 * bbox_loss + 0.5 * obj_loss
+    
+    return loss
 
 
 def train_epoch(model, dataloader, optimizer, device, epoch):
@@ -183,6 +250,10 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
     
     for batch_idx, (images, boxes_list, labels_list) in enumerate(pbar):
         images = images.to(device)
+        # Move boxes and labels to device
+        boxes_list = [boxes.to(device) for boxes in boxes_list]
+        labels_list = [labels.to(device) for labels in labels_list]
+        
         optimizer.zero_grad()
         
         # Call with positional argument to avoid DataParallel kwargs issue
@@ -208,6 +279,9 @@ def evaluate(model, dataloader, device):
     with torch.no_grad():
         for images, boxes_list, labels_list in tqdm(dataloader, desc="Evaluating"):
             images = images.to(device)
+            # Move boxes and labels to device
+            boxes_list = [boxes.to(device) for boxes in boxes_list]
+            labels_list = [labels.to(device) for labels in labels_list]
             
             # Call with positional argument to avoid DataParallel kwargs issue
             cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
@@ -264,15 +338,16 @@ def visualize_detection_results(
         vis_save_path.mkdir(parents=True, exist_ok=True)
         
         for j in range(images_np.shape[0]):
-            # Group 1: Detection Results (Image with GT Boxes)
-            fig1, ax1 = plt.subplots(1, 1, figsize=(6, 6))
+            # Group 1: Detection Results (GT vs Predictions side by side)
+            fig1, axes1 = plt.subplots(1, 2, figsize=(12, 6))
             fig1.suptitle(f"Detection Results - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
             
             img = images_np[j].transpose(1, 2, 0)
             mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
             img = np.clip(std * img + mean, 0, 1)
-            ax1.imshow(img)
             
+            # Left: Ground Truth Boxes
+            axes1[0].imshow(img)
             if j < len(fixed_boxes_list):
                 boxes = fixed_boxes_list[j]
                 if len(boxes) > 0:
@@ -282,14 +357,57 @@ def visualize_detection_results(
                             (x1*img.shape[1], y1*img.shape[0]), 
                             (x2-x1)*img.shape[1], 
                             (y2-y1)*img.shape[0],
-                            linewidth=2, edgecolor='r', facecolor='none'
+                            linewidth=2, edgecolor='lime', facecolor='none', label='GT'
                         )
-                        ax1.add_patch(rect)
+                        axes1[0].add_patch(rect)
+            axes1[0].set_title("Ground Truth Boxes")
+            axes1[0].axis("off")
             
-            ax1.set_title("Image with GT Boxes")
-            ax1.axis("off")
+            # Right: Predicted Boxes (extract top predictions from objectness)
+            axes1[1].imshow(img)
             
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            # Reshape to handle multi-anchor output
+            num_anchors = 3
+            H_det = obj_pred.size(2)
+            W_det = obj_pred.size(3)
+            obj_pred_reshaped = obj_pred[j].view(num_anchors, H_det, W_det)  # (num_anchors, H, W)
+            obj_map = torch.sigmoid(obj_pred_reshaped[0]).cpu().numpy()  # Use first anchor (H, W)
+            bbox_pred_reshaped = bbox_pred[j].view(num_anchors, 4, H_det, W_det)  # (num_anchors, 4, H, W)
+            
+            # Find top-k objectness locations
+            obj_flat = obj_map.flatten()
+            top_k = min(10, len(obj_flat))  # Show top 10 predictions
+            top_indices = np.argpartition(obj_flat, -top_k)[-top_k:]
+            top_scores = obj_flat[top_indices]
+            
+            # Only show predictions with score > 0.5
+            for idx in top_indices:
+                score = obj_flat[idx]
+                if score > 0.5:
+                    y_idx = idx // W_det
+                    x_idx = idx % W_det
+                    
+                    # Get predicted box at this location (use first anchor)
+                    pred_box = bbox_pred_reshaped[0, :, y_idx, x_idx].cpu().numpy()
+                    x1, y1, x2, y2 = pred_box
+                    
+                    # Draw prediction box
+                    rect = patches.Rectangle(
+                        (x1*img.shape[1], y1*img.shape[0]), 
+                        (x2-x1)*img.shape[1], 
+                        (y2-y1)*img.shape[0],
+                        linewidth=2, edgecolor='red', facecolor='none', alpha=score
+                    )
+                    axes1[1].add_patch(rect)
+                    # Add score text
+                    axes1[1].text(x1*img.shape[1], y1*img.shape[0]-5, 
+                                 f'{score:.2f}', color='red', fontsize=8, 
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            axes1[1].set_title("Predicted Boxes (score > 0.5)")
+            axes1[1].axis("off")
+            
+            plt.tight_layout()
             vis_figs.append(fig1)
             
             fig1.savefig(
@@ -311,7 +429,7 @@ def visualize_detection_results(
                 axes2[1].set_title("Adapted Model Attn")
                 axes2[1].axis("off")
                 
-                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                plt.tight_layout()
                 vis_figs.append(fig2)
                 
                 fig2.savefig(
@@ -354,6 +472,7 @@ def run_training_loop(
 ):
     """Execute main training and evaluation loop"""
     best_loss = float('inf')
+    val_loss = float('inf')  # Initialize val_loss
     start_time = time.time()
     
     for epoch in range(args.epochs):
