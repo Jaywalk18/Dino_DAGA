@@ -82,6 +82,22 @@ class COCODetectionDataset(Dataset):
         
         # Filter out images without annotations
         self.ids = [img_id for img_id in self.ids if len(self.coco.getAnnIds(imgIds=img_id)) > 0]
+        
+        print(f"Found {len(self.ids)} images with annotations")
+        
+        # Validate a few samples
+        if len(self.ids) > 0:
+            self._validate_samples(min(3, len(self.ids)))
+    
+    def _validate_samples(self, num_samples=3):
+        """Validate a few samples to check bbox ranges"""
+        print(f"Validating {num_samples} detection samples...")
+        for i in range(num_samples):
+            img_id = self.ids[i]
+            ann_ids = self.coco.getAnnIds(imgIds=img_id)
+            anns = self.coco.loadAnns(ann_ids)
+            num_boxes = len([ann for ann in anns if 'bbox' in ann and ann['area'] > 0])
+            print(f"  Sample {i} (img_id={img_id}): {num_boxes} valid boxes")
 
     def __len__(self):
         return len(self.ids)

@@ -15,6 +15,8 @@ class ClassificationHead(nn.Module):
         return self.classifier(features)
 
 
+# In core/heads.py
+
 class LinearSegmentationHead(nn.Module):
     def __init__(self, in_channels, num_classes, use_bn=True):
         super().__init__()
@@ -34,9 +36,14 @@ class LinearSegmentationHead(nn.Module):
         nn.init.constant_(self.conv.bias, 0)
     
     def forward(self, features_list, target_size):
-        base_size = features_list[0].shape[2:]
+        # Ensure all incoming feature maps are contiguous in memory.
+        # This is the primary fix for the misaligned address error, as features
+        # from the ViT backbone can be non-contiguous after transpose/reshape ops.
+        contiguous_features = [feat.contiguous() for feat in features_list]
+        
+        base_size = contiguous_features[0].shape[2:]
         aligned_features = []
-        for feat in features_list:
+        for feat in contiguous_features:
             if feat.shape[2:] != base_size:
                 feat = F.interpolate(feat, size=base_size, mode='bilinear', align_corners=False)
             aligned_features.append(feat)
@@ -45,9 +52,12 @@ class LinearSegmentationHead(nn.Module):
         x = self.dropout(x)
         x = self.bn(x)
         x = self.conv(x)
-        x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
+        
+        # The second contiguous() call is kept as a safeguard for the final interpolation.
+        x = F.interpolate(x.contiguous(), size=target_size, mode='bilinear', align_corners=False)
         
         return x
+
 
 
 class DetectionHead(nn.Module):

@@ -28,9 +28,9 @@ CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 DINOV3_MODEL="dinov3_vits16"
 PRETRAINED_PATH="${CHECKPOINT_DIR}/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 
-# Common parameters
+# Common parameters (aligned with raw_code successful baseline)
 SEED=42
-INPUT_SIZE=224
+INPUT_SIZE=224  # Raw code uses 224, not 518
 
 cd $PROJECT_ROOT
 export PYTHONPATH=$PYTHONPATH:$(pwd)
