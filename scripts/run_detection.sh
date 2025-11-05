@@ -2,21 +2,25 @@
 # Detection training script following official DINOv3 configuration
 set -e
 
+# Activate environment
+source activate dinov3_env
+
 # Configuration
 DATASET="coco"
 MODEL_NAME="dinov3_vits16"
 PRETRAINED_PATH="dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 DATA_PATH="/home/user/zhoutianjian/DataSets/COCO 2017"
 BASE_OUTPUT_DIR="outputs/detection"
-GPU_IDS="1,2,3,4,5,6"
+DEFAULT_GPU_IDS="3,4,5,6"
+GPU_IDS="${GPU_IDS:-$DEFAULT_GPU_IDS}"
 SEED=42
 
 # Training hyperparameters (quick test with subset of data)
-EPOCHS=1  # Quick test with 1 epoch
-BATCH_SIZE=128  # 4 per GPU (6 GPUs) - increased for faster training
+EPOCHS=40  # Quick test with 1 epoch
+BATCH_SIZE=256  # 4 per GPU (6 GPUs) - increased for faster training
 INPUT_SIZE=518
 LR=1e-4
-MAX_SAMPLES=2000  # Use 200 samples for quick test
+SAMPLE_RATIO=0.5  # Use 2% of data for quick test
 LAYERS_TO_USE="2 5 8 11"  # Multi-layer features like official
 
 # Setup
@@ -27,6 +31,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 mkdir -p "$BASE_OUTPUT_DIR"
 echo "🚀 DINOv3 Detection Training"
+echo "  Sample %:   ${SAMPLE_RATIO}"
 echo "==================================================================="
 echo "  Model:      ${MODEL_NAME}"
 echo "  GPU IDs:    ${GPU_IDS}"
@@ -47,6 +52,11 @@ run_experiment() {
 
     echo -e "\n▶️  ${description}"
 
+    local sample_args=()
+    if [[ -n "$SAMPLE_RATIO" ]]; then
+        sample_args+=(--sample_ratio "$SAMPLE_RATIO")
+    fi
+
     CUDA_VISIBLE_DEVICES=$GPU_IDS python main_detection.py \
         --seed "$SEED" \
         --dataset "$DATASET" \
@@ -57,12 +67,12 @@ run_experiment() {
         --batch_size "$BATCH_SIZE" \
         --input_size "$INPUT_SIZE" \
         --lr "$LR" \
-        --max_samples "$MAX_SAMPLES" \
         --output_dir "$output_subdir" \
         --enable_visualization \
         --num_vis_samples 4 \
         --log_freq 1 \
         --layers_to_use $LAYERS_TO_USE \
+        "${sample_args[@]}" \
         "$@"
 
     [ $? -eq 0 ] && echo "✅  SUCCESS" || (echo "❌  FAILED" && exit 1)
