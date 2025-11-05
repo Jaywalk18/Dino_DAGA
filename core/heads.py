@@ -128,14 +128,16 @@ class DetectionHead(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         
-        # Better initialization for classification head (focal loss style)
+        # Better initialization for detection heads
         nn.init.normal_(self.cls_head.weight, mean=0, std=0.01)
-        nn.init.constant_(self.cls_head.bias, -np.log((1 - 0.01) / 0.01))  # Prior bias
+        nn.init.constant_(self.cls_head.bias, 0)  # Neutral bias for classification
         
-        nn.init.normal_(self.bbox_head.weight, mean=0, std=0.001)
+        nn.init.normal_(self.bbox_head.weight, mean=0, std=0.01)
         nn.init.constant_(self.bbox_head.bias, 0)
+        
+        # Initialize objectness head with slight positive bias to encourage predictions
         nn.init.normal_(self.obj_head.weight, mean=0, std=0.01)
-        nn.init.constant_(self.obj_head.bias, 0)
+        nn.init.constant_(self.obj_head.bias, -2.0)  # Sigmoid(-2) ≈ 0.12, gives initial predictions
     
     def forward(self, x):
         # Deeper feature extraction with residual-like connections

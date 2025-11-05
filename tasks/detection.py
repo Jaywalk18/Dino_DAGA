@@ -521,7 +521,7 @@ def evaluate(model, dataloader, device):
             total_loss += loss.item()
             
             # Decode predictions for metrics
-            decoded = decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.05)
+            decoded = decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.01)
             
             for (pred_boxes, pred_scores, pred_labels), gt_boxes, gt_labels in zip(
                 decoded, boxes_list, labels_list
