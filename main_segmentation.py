@@ -117,12 +117,21 @@ def main():
     train_dataset, val_dataset, num_classes = get_segmentation_dataset(args)
     
     # Apply max_samples limit if specified
-    if args.max_samples is not None and args.max_samples < len(train_dataset):
+    if args.max_samples is not None:
         import random
         random.seed(args.seed)
-        indices = random.sample(range(len(train_dataset)), args.max_samples)
-        train_dataset = torch.utils.data.Subset(train_dataset, indices)
-        print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val samples")
+        
+        if args.max_samples < len(train_dataset):
+            train_indices = random.sample(range(len(train_dataset)), args.max_samples)
+            train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
+        
+        # Also limit validation set for faster testing
+        val_limit = min(args.max_samples // 2, len(val_dataset))
+        if val_limit < len(val_dataset):
+            val_indices = random.sample(range(len(val_dataset)), val_limit)
+            val_dataset = torch.utils.data.Subset(val_dataset, val_indices)
+        
+        print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val (limited) samples")
     else:
         print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
     print(f"  Number of classes: {num_classes}")

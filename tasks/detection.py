@@ -172,45 +172,55 @@ def setup_training_components(model, args):
     return optimizer, scheduler
 
 
-def generalized_box_iou(boxes1, boxes2):
+def generalized_box_iou_loss(pred_boxes, target_boxes):
     """
-    Compute Generalized IoU between two sets of boxes.
+    Compute GIoU loss between predicted and target boxes.
     Args:
-        boxes1: (N, 4) in format [x1, y1, x2, y2]
-        boxes2: (N, 4) in format [x1, y1, x2, y2]
+        pred_boxes: (N, 4) in format [x1, y1, x2, y2], normalized [0,1], already sigmoid
+        target_boxes: (N, 4) in format [x1, y1, x2, y2], normalized [0,1]
     Returns:
-        GIoU values (N,)
+        GIoU loss (scalar)
     """
-    # Intersection area
-    inter_x1 = torch.max(boxes1[:, 0], boxes2[:, 0])
-    inter_y1 = torch.max(boxes1[:, 1], boxes2[:, 1])
-    inter_x2 = torch.min(boxes1[:, 2], boxes2[:, 2])
-    inter_y2 = torch.min(boxes1[:, 3], boxes2[:, 3])
+    # Boxes are already normalized to [0,1] from sigmoid
+    pred_boxes = pred_boxes.clamp(0, 1)
+    target_boxes = target_boxes.clamp(0, 1)
+    
+    # Compute areas
+    pred_area = (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1])
+    target_area = (target_boxes[:, 2] - target_boxes[:, 0]) * (target_boxes[:, 3] - target_boxes[:, 1])
+    
+    # Intersection
+    inter_x1 = torch.max(pred_boxes[:, 0], target_boxes[:, 0])
+    inter_y1 = torch.max(pred_boxes[:, 1], target_boxes[:, 1])
+    inter_x2 = torch.min(pred_boxes[:, 2], target_boxes[:, 2])
+    inter_y2 = torch.min(pred_boxes[:, 3], target_boxes[:, 3])
     
     inter_w = (inter_x2 - inter_x1).clamp(min=0)
     inter_h = (inter_y2 - inter_y1).clamp(min=0)
     inter_area = inter_w * inter_h
     
-    # Union area
-    boxes1_area = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
-    boxes2_area = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
-    union_area = boxes1_area + boxes2_area - inter_area
+    # Union
+    union_area = pred_area + target_area - inter_area + 1e-7
     
     # IoU
-    iou = inter_area / (union_area + 1e-7)
+    iou = inter_area / union_area
     
-    # Smallest enclosing box
-    enclosing_x1 = torch.min(boxes1[:, 0], boxes2[:, 0])
-    enclosing_y1 = torch.min(boxes1[:, 1], boxes2[:, 1])
-    enclosing_x2 = torch.max(boxes1[:, 2], boxes2[:, 2])
-    enclosing_y2 = torch.max(boxes1[:, 3], boxes2[:, 3])
+    # Enclosing box
+    enclosing_x1 = torch.min(pred_boxes[:, 0], target_boxes[:, 0])
+    enclosing_y1 = torch.min(pred_boxes[:, 1], target_boxes[:, 1])
+    enclosing_x2 = torch.max(pred_boxes[:, 2], target_boxes[:, 2])
+    enclosing_y2 = torch.max(pred_boxes[:, 3], target_boxes[:, 3])
     
-    enclosing_area = (enclosing_x2 - enclosing_x1) * (enclosing_y2 - enclosing_y1)
+    enclosing_area = (enclosing_x2 - enclosing_x1) * (enclosing_y2 - enclosing_y1) + 1e-7
     
     # GIoU
-    giou = iou - (enclosing_area - union_area) / (enclosing_area + 1e-7)
+    giou = iou - (enclosing_area - union_area) / enclosing_area
     
-    return giou
+    # GIoU loss: 1 - GIoU, range [0, 2]
+    # Clamp to avoid negative loss
+    loss = torch.clamp(1.0 - giou, min=0.0, max=2.0)
+    
+    return loss.mean()
 
 
 def focal_loss(pred, target, alpha=0.25, gamma=2.0):
@@ -225,11 +235,11 @@ def focal_loss(pred, target, alpha=0.25, gamma=2.0):
 
 def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     """
-    Improved detection loss with Focal Loss and GIoU Loss.
+    Simplified detection loss with CrossEntropy and L1 Loss.
     
     Args:
         cls_pred: (B, num_anchors * num_classes, H, W)
-        bbox_pred: (B, num_anchors * 4, H, W)
+        bbox_pred: (B, num_anchors * 4, H, W) - already sigmoid normalized
         obj_pred: (B, num_anchors, H, W)
         boxes_list: list of (N, 4) tensors - GT boxes (normalized [0,1])
         labels_list: list of (N,) tensors - GT labels
@@ -279,16 +289,16 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
                 obj_target[anchor_idx, cy_int, cx_int] = 1.0
                 num_pos_samples += 1
                 
-                # Focal Loss for classification
+                # Cross Entropy for classification
                 pred_logits = cls_pred[b, anchor_idx, :, cy_int, cx_int].unsqueeze(0)
-                total_cls_loss += focal_loss(pred_logits, labels[i:i+1])
+                total_cls_loss += F.cross_entropy(pred_logits, labels[i:i+1], reduction='mean')
                 
-                # GIoU Loss for bbox
+                # L1 Loss for bbox (simpler and more stable than GIoU)
                 pred_box = bbox_pred[b, anchor_idx, :, cy_int, cx_int]
-                giou = generalized_box_iou(pred_box.unsqueeze(0), boxes[i].unsqueeze(0))
-                total_bbox_loss += (1.0 - giou).mean()
+                target_box = boxes[i]
+                total_bbox_loss += F.l1_loss(pred_box, target_box, reduction='mean')
         
-        # Binary focal loss for objectness
+        # Binary cross entropy for objectness
         obj_pos = obj_pred[b][obj_target == 1]
         obj_neg = obj_pred[b][obj_target == 0]
         
@@ -306,7 +316,12 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     bbox_loss = total_bbox_loss / num_pos_samples
     obj_loss = total_obj_loss / batch_size
     
-    # Combined loss
+    # Ensure all losses are positive
+    cls_loss = torch.abs(cls_loss)
+    bbox_loss = torch.abs(bbox_loss)
+    obj_loss = torch.abs(obj_loss)
+    
+    # Combined loss with balanced weights
     loss = cls_loss + 2.0 * bbox_loss + 0.5 * obj_loss
     
     return loss
@@ -343,9 +358,11 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
 
 
 def compute_iou(box1, box2):
-    """Compute IoU between two boxes (x1,y1,x2,y2 format)"""
-    x1_min, y1_min, x1_max, y1_max = box1
-    x2_min, y2_min, x2_max, y2_max = box2
+    """
+    Compute IoU between two boxes (x1,y1,x2,y2 format)
+    """
+    x1_min, y1_min, x1_max, y1_max = box1[0], box1[1], box1[2], box1[3]
+    x2_min, y2_min, x2_max, y2_max = box2[0], box2[1], box2[2], box2[3]
     
     # Intersection
     inter_x_min = max(x1_min, x2_min)
@@ -423,9 +440,9 @@ def decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.05, nms_t
                 if conf < conf_threshold:
                     continue
                 
-                # Get bbox (already in normalized coordinates)
+                # Get bbox (already in normalized coordinates from sigmoid)
                 bbox = bbox_pred[b, anchor_idx, :, y, x]
-                bbox = torch.clamp(bbox, 0, 1)
+                # No need to clamp, already sigmoid output in [0,1]
                 
                 boxes_batch.append(bbox.cpu())
                 scores_batch.append(conf.cpu().item())

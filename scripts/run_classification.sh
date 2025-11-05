@@ -3,10 +3,10 @@
 set -e
 
 # Configuration
-DATASET="imagenet1k"
+DATASET="cifar100"
 MODEL_NAME="dinov3_vits16"
 PRETRAINED_PATH="dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
-DATA_PATH="/home/user/zhoutianjian/DataSets/ImageNet1k_100class"
+DATA_PATH="/home/user/zhoutianjian/DataSets/cifar"
 BASE_OUTPUT_DIR="outputs/classification"
 GPU_IDS=${1:-"1,2,3,4,5,6"}
 SEED=42

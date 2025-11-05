@@ -8,16 +8,15 @@ MODEL_NAME="dinov3_vits16"
 PRETRAINED_PATH="dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
 DATA_PATH="/home/user/zhoutianjian/DataSets/ADE20K_2021_17_01"
 BASE_OUTPUT_DIR="outputs/segmentation"
-GPU_IDS=${1:-"1,2,3,4,5,6"}
+GPU_IDS="1,2,3,4,5,6"
 SEED=42
 
-# Training hyperparameters (aligned with official: 40K iterations)
-# For ADE20K ~20K train images, 40K iters ≈ 32 epochs with BS=16
-EPOCHS=40  # Increased from 1 to 40
-BATCH_SIZE=16  # 2 per GPU recommended
+# Training hyperparameters (quick test with subset of data)
+EPOCHS=1  # Quick test with 1 epoch
+BATCH_SIZE=128  # increased for faster training
 INPUT_SIZE=518
 LR=1e-3  # Higher LR for segmentation (official uses 1e-3)
-MAX_SAMPLES=  # Empty = use full dataset
+MAX_SAMPLES=2000  # Use 200 samples for quick test
 OUT_INDICES="2 5 8 11"  # Multi-layer features
 
 # Setup
@@ -58,10 +57,11 @@ run_experiment() {
         --batch_size "$BATCH_SIZE" \
         --input_size "$INPUT_SIZE" \
         --lr "$LR" \
+        --max_samples "$MAX_SAMPLES" \
         --output_dir "$output_subdir" \
         --enable_visualization \
         --num_vis_samples 4 \
-        --log_freq 5 \
+        --log_freq 1 \
         --out_indices $OUT_INDICES \
         "$@"
 
@@ -69,7 +69,7 @@ run_experiment() {
 }
 
 # Experiments
-run_experiment "01_baseline" "Baseline (Lightweight Head)"
+# run_experiment "01_baseline" "Baseline (Lightweight Head)"
 
 run_experiment "02_daga_last_layer" "DAGA Single Layer (L11)" \
     --use_daga --daga_layers 11
