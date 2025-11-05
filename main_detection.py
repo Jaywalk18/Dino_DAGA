@@ -56,6 +56,12 @@ def parse_arguments():
         default=None,
         help="Maximum number of training samples to use (for quick testing)",
     )
+    parser.add_argument(
+        "--sample_ratio",
+        type=float,
+        default=None,
+        help="Fraction (0, 1] of the dataset to use for quick testing",
+    )
     
     parser.add_argument(
         "--use_daga",
@@ -117,21 +123,30 @@ def main():
     print(f"Loading {args.dataset.upper()} dataset...")
     train_dataset, val_dataset, num_classes = get_detection_dataset(args)
     
-    # Apply max_samples limit if specified
+    limit_train = None
+    limit_val = None
+    if args.sample_ratio is not None:
+        if not (0 < args.sample_ratio <= 1.0):
+            raise ValueError("sample_ratio must be in the range (0, 1].")
+        limit_train = max(1, int(len(train_dataset) * args.sample_ratio))
+        limit_val = max(1, int(len(val_dataset) * args.sample_ratio))
     if args.max_samples is not None:
+        limit_train = min(args.max_samples, len(train_dataset))
+        limit_val = min(max(1, args.max_samples // 2), len(val_dataset))
+    
+    if limit_train is not None or limit_val is not None:
         import random
         random.seed(args.seed)
-        
-        if args.max_samples < len(train_dataset):
-            train_indices = random.sample(range(len(train_dataset)), args.max_samples)
+        if limit_train is None:
+            limit_train = len(train_dataset)
+        if limit_val is None:
+            limit_val = len(val_dataset)
+        if limit_train < len(train_dataset):
+            train_indices = random.sample(range(len(train_dataset)), limit_train)
             train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
-        
-        # Also limit validation set for faster testing
-        val_limit = min(args.max_samples // 2, len(val_dataset))
-        if val_limit < len(val_dataset):
-            val_indices = random.sample(range(len(val_dataset)), val_limit)
+        if limit_val < len(val_dataset):
+            val_indices = random.sample(range(len(val_dataset)), limit_val)
             val_dataset = torch.utils.data.Subset(val_dataset, val_indices)
-        
         print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val (limited) samples")
     else:
         print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
@@ -192,6 +207,7 @@ def main():
         output_dir,
         fixed_vis_images,
         fixed_vis_boxes,
+        num_classes,
     )
     
     print(f'\n{"="*70}\n🎉 Training Completed!\n{"="*70}')

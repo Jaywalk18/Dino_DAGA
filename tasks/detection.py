@@ -12,7 +12,7 @@ import matplotlib.patches as patches
 import swanlab
 
 from core.daga import DAGA
-from core.heads import DetectionHead
+from core.detr_components import DETRHead, detr_loss, box_cxcywh_to_xyxy
 from core.backbones import get_attention_map, compute_daga_guidance_map, process_attention_weights
 from core.utils import get_base_model
 
@@ -49,18 +49,26 @@ class DetectionModel(nn.Module):
             for param in self.daga_modules.parameters():
                 param.requires_grad = True
         
-        # Detection head takes concatenated multi-layer features
+        # DETR-style detection head
         total_feature_dim = self.feature_dim * len(layers_to_use)
-        self.detection_head = DetectionHead(total_feature_dim, num_classes)
+        self.detection_head = DETRHead(
+            feature_dim=total_feature_dim,
+            num_classes=num_classes,
+            num_queries=100,  # Standard DETR uses 100 queries
+            hidden_dim=256,
+            nheads=8,
+            num_decoder_layers=6
+        )
         
         for param in self.detection_head.parameters():
             param.requires_grad = True
         
         print(
-            f"✓ DetectionModel initialized:\n"
+            f"✓ DetectionModel initialized (DETR-style):\n"
             f"  - Feature dim: {self.feature_dim} x {len(layers_to_use)} layers = {total_feature_dim}\n"
             f"  - Layers to use: {layers_to_use}\n"
             f"  - Num classes: {num_classes}\n"
+            f"  - Num queries: 100\n"
             f"  - Use DAGA: {self.use_daga} (Layers: {self.daga_layers if self.use_daga else 'N/A'})"
         )
     
@@ -124,9 +132,10 @@ class DetectionModel(nn.Module):
         # Concatenate multi-layer features
         multi_layer_features = torch.cat(intermediate_features, dim=1)
         
-        cls_output, bbox_output, obj_output = self.detection_head(multi_layer_features)
+        # DETR head returns (pred_logits, pred_boxes)
+        pred_logits, pred_boxes = self.detection_head(multi_layer_features)
         
-        return cls_output, bbox_output, obj_output, adapted_attn_weights, daga_guidance_map
+        return pred_logits, pred_boxes, adapted_attn_weights, daga_guidance_map
 
 
 def setup_training_components(model, args):
@@ -172,7 +181,9 @@ def setup_training_components(model, args):
     return optimizer, scheduler
 
 
-def generalized_box_iou_loss(pred_boxes, target_boxes):
+# Legacy functions removed - now using DETR components
+
+def _generalized_box_iou_loss(pred_boxes, target_boxes):
     """
     Compute GIoU loss between predicted and target boxes.
     Args:
@@ -233,7 +244,7 @@ def focal_loss(pred, target, alpha=0.25, gamma=2.0):
     return (focal_weight * ce_loss).mean()
 
 
-def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
+def _old_detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     """
     Simplified detection loss with CrossEntropy and L1 Loss.
     
@@ -327,8 +338,8 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     return loss
 
 
-def train_epoch(model, dataloader, optimizer, device, epoch):
-    """Train for one epoch"""
+def train_epoch(model, dataloader, optimizer, device, epoch, num_classes):
+    """Train for one epoch with DETR loss"""
     model.train()
     total_loss = 0.0
     
@@ -342,17 +353,25 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
         
         optimizer.zero_grad()
         
-        # Call with positional argument to avoid DataParallel kwargs issue
-        cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
+        # Forward pass - returns (pred_logits, pred_boxes)
+        pred_logits, pred_boxes, _, _ = model(images, False)
         
-        loss = detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list)
+        # DETR loss
+        loss_dict = detr_loss(pred_logits, pred_boxes, boxes_list, labels_list, num_classes)
+        loss = loss_dict['loss']
+        
         loss.backward()
         optimizer.step()
         
         total_loss += loss.item()
         running_avg_loss = total_loss / (batch_idx + 1)
         
-        pbar.set_postfix({"Loss": f"{running_avg_loss:.4f}"})
+        pbar.set_postfix({
+            "Loss": f"{running_avg_loss:.4f}",
+            "CE": f"{loss_dict['loss_ce'].item():.3f}",
+            "BBox": f"{loss_dict['loss_bbox'].item():.3f}",
+            "GIoU": f"{loss_dict['loss_giou'].item():.3f}"
+        })
     
     return total_loss / len(dataloader)
 
@@ -382,82 +401,40 @@ def compute_iou(box1, box2):
     return inter_area / (union_area + 1e-6)
 
 
-def decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.05, nms_threshold=0.5):
+def decode_predictions_detr(pred_logits, pred_boxes, conf_threshold=0.3):
     """
-    Decode predictions from network outputs to bounding boxes.
+    Decode DETR predictions to bounding boxes
     
     Args:
-        cls_pred: (B, num_anchors * num_classes, H, W)
-        bbox_pred: (B, num_anchors * 4, H, W)
-        obj_pred: (B, num_anchors, H, W)
+        pred_logits: (B, num_queries, num_classes)
+        pred_boxes: (B, num_queries, 4) in cxcywh format, normalized
         conf_threshold: confidence threshold for filtering
-        nms_threshold: IoU threshold for NMS
     
     Returns:
         List of (boxes, scores, labels) for each image in batch
     """
-    batch_size = cls_pred.size(0)
-    num_anchors = 3
-    num_classes = cls_pred.size(1) // num_anchors
-    H, W = cls_pred.size(2), cls_pred.size(3)
-    
-    # Reshape
-    cls_pred = cls_pred.view(batch_size, num_anchors, num_classes, H, W)
-    bbox_pred = bbox_pred.view(batch_size, num_anchors, 4, H, W)
-    obj_pred = obj_pred.view(batch_size, num_anchors, H, W)
+    batch_size = pred_logits.size(0)
     
     results = []
     
     for b in range(batch_size):
-        boxes_batch = []
-        scores_batch = []
-        labels_batch = []
+        logits = pred_logits[b]  # (num_queries, num_classes)
+        boxes = pred_boxes[b]  # (num_queries, 4)
         
-        # Get objectness scores
-        obj_scores = torch.sigmoid(obj_pred[b])  # (num_anchors, H, W)
+        # Get class probabilities
+        probs = logits.softmax(-1)  # (num_queries, num_classes)
+        scores, labels = probs.max(-1)  # (num_queries,)
         
-        # Process each anchor
-        for anchor_idx in range(num_anchors):
-            obj_map = obj_scores[anchor_idx]  # (H, W)
-            
-            # Find high-confidence locations
-            conf_mask = obj_map > conf_threshold
-            if conf_mask.sum() == 0:
-                continue
-            
-            # Get coordinates where confidence is high
-            y_coords, x_coords = torch.where(conf_mask)
-            
-            for y, x in zip(y_coords, x_coords):
-                # Get class prediction
-                class_logits = cls_pred[b, anchor_idx, :, y, x]
-                class_probs = torch.softmax(class_logits, dim=0)
-                max_prob, pred_class = class_probs.max(dim=0)
-                
-                # Combined confidence
-                conf = obj_map[y, x] * max_prob
-                
-                if conf < conf_threshold:
-                    continue
-                
-                # Get bbox (already in normalized coordinates from sigmoid)
-                bbox = bbox_pred[b, anchor_idx, :, y, x]
-                # No need to clamp, already sigmoid output in [0,1]
-                
-                boxes_batch.append(bbox.cpu())
-                scores_batch.append(conf.cpu().item())
-                labels_batch.append(pred_class.cpu().item())
+        # Filter by confidence
+        keep = scores > conf_threshold
+        scores = scores[keep]
+        labels = labels[keep]
+        boxes = boxes[keep]
         
-        # Simple NMS
-        if len(boxes_batch) > 0:
-            boxes_tensor = torch.stack(boxes_batch)
-            keep_indices = simple_nms(boxes_tensor, scores_batch, nms_threshold)
-            
-            boxes_batch = [boxes_batch[i] for i in keep_indices]
-            scores_batch = [scores_batch[i] for i in keep_indices]
-            labels_batch = [labels_batch[i] for i in keep_indices]
+        # Convert boxes from cxcywh to xyxy format
+        boxes_xyxy = box_cxcywh_to_xyxy(boxes)
         
-        results.append((boxes_batch, scores_batch, labels_batch))
+        results.append((boxes_xyxy.cpu(), scores.cpu(), labels.cpu()))
     
     return results
 
@@ -568,8 +545,8 @@ def compute_detection_metrics(pred_boxes_list, pred_labels_list, gt_boxes_list, 
     }
 
 
-def evaluate(model, dataloader, device):
-    """Evaluate detection model with loss and mAP metrics"""
+def evaluate(model, dataloader, device, num_classes):
+    """Evaluate detection model with DETR loss and mAP metrics"""
     model.eval()
     total_loss = 0.0
     
@@ -584,20 +561,20 @@ def evaluate(model, dataloader, device):
             boxes_list = [boxes.to(device) for boxes in boxes_list]
             labels_list = [labels.to(device) for labels in labels_list]
             
-            cls_pred, bbox_pred, obj_pred, _, _ = model(images, False)
+            pred_logits, pred_boxes, _, _ = model(images, False)
             
             # Compute loss
-            loss = detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list)
-            total_loss += loss.item()
+            loss_dict = detr_loss(pred_logits, pred_boxes, boxes_list, labels_list, num_classes)
+            total_loss += loss_dict['loss'].item()
             
-            # Decode predictions for metrics
-            decoded = decode_predictions(cls_pred, bbox_pred, obj_pred, conf_threshold=0.01)
+            # Decode predictions for metrics - lower threshold for evaluation
+            decoded = decode_predictions_detr(pred_logits, pred_boxes, conf_threshold=0.05)
             
             for (pred_boxes, pred_scores, pred_labels), gt_boxes, gt_labels in zip(
                 decoded, boxes_list, labels_list
             ):
-                all_pred_boxes.append(pred_boxes)
-                all_pred_labels.append(pred_labels)
+                all_pred_boxes.append([pred_boxes[i].tolist() for i in range(len(pred_boxes))])
+                all_pred_labels.append([pred_labels[i].item() for i in range(len(pred_labels))])
                 all_gt_boxes.append(gt_boxes.cpu())
                 all_gt_labels.append(gt_labels.cpu())
     
@@ -626,7 +603,7 @@ def visualize_detection_results(
         _, (H, W) = base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
         
-        cls_pred, bbox_pred, obj_pred, adapted_attn_weights, _ = base_model(
+        pred_logits, pred_boxes, adapted_attn_weights, _ = base_model(
             fixed_images, True
         )
         
@@ -682,48 +659,47 @@ def visualize_detection_results(
             axes1[0].set_title("Ground Truth Boxes")
             axes1[0].axis("off")
             
-            # Right: Predicted Boxes (extract top predictions from objectness)
+            # Right: Predicted Boxes (DETR output)
             axes1[1].imshow(img)
             
-            # Reshape to handle multi-anchor output
-            num_anchors = 3
-            H_det = obj_pred.size(2)
-            W_det = obj_pred.size(3)
-            obj_pred_reshaped = obj_pred[j].view(num_anchors, H_det, W_det)  # (num_anchors, H, W)
-            obj_map = torch.sigmoid(obj_pred_reshaped[0]).cpu().numpy()  # Use first anchor (H, W)
-            bbox_pred_reshaped = bbox_pred[j].view(num_anchors, 4, H_det, W_det)  # (num_anchors, 4, H, W)
+            # Decode predictions
+            logits_j = pred_logits[j:j+1]  # (1, num_queries, num_classes)
+            boxes_j = pred_boxes[j:j+1]  # (1, num_queries, 4)
             
-            # Find top-k objectness locations
-            obj_flat = obj_map.flatten()
-            top_k = min(10, len(obj_flat))  # Show top 10 predictions
-            top_indices = np.argpartition(obj_flat, -top_k)[-top_k:]
-            top_scores = obj_flat[top_indices]
+            # Debug: Print raw predictions
+            if j == 0:
+                print(f"\n[DEBUG] Sample {j} - Raw predictions:")
+                print(f"  Box range: [{boxes_j[0].min().item():.3f}, {boxes_j[0].max().item():.3f}]")
+                print(f"  Box mean: {boxes_j[0].mean().item():.3f}")
+                print(f"  Sample boxes (first 5):")
+                for idx in range(min(5, boxes_j.shape[1])):
+                    print(f"    Query {idx}: cx={boxes_j[0,idx,0]:.3f}, cy={boxes_j[0,idx,1]:.3f}, w={boxes_j[0,idx,2]:.3f}, h={boxes_j[0,idx,3]:.3f}")
             
-            # Only show predictions with score > 0.5
-            for idx in top_indices:
-                score = obj_flat[idx]
-                if score > 0.5:
-                    y_idx = idx // W_det
-                    x_idx = idx % W_det
-                    
-                    # Get predicted box at this location (use first anchor)
-                    pred_box = bbox_pred_reshaped[0, :, y_idx, x_idx].cpu().numpy()
-                    x1, y1, x2, y2 = pred_box
-                    
-                    # Draw prediction box
-                    rect = patches.Rectangle(
-                        (x1*img.shape[1], y1*img.shape[0]), 
-                        (x2-x1)*img.shape[1], 
-                        (y2-y1)*img.shape[0],
-                        linewidth=2, edgecolor='red', facecolor='none', alpha=score
-                    )
-                    axes1[1].add_patch(rect)
-                    # Add score text
-                    axes1[1].text(x1*img.shape[1], y1*img.shape[0]-5, 
-                                 f'{score:.2f}', color='red', fontsize=8, 
-                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            # Lower threshold for visualization to see more predictions
+            decoded = decode_predictions_detr(logits_j, boxes_j, conf_threshold=0.1)
+            pred_boxes_vis, pred_scores_vis, pred_labels_vis = decoded[0]
             
-            axes1[1].set_title("Predicted Boxes (score > 0.5)")
+            print(f"  Sample {j}: {len(pred_boxes_vis)} predictions above threshold")
+            
+            # Show top predictions
+            for pred_box, score in zip(pred_boxes_vis[:10], pred_scores_vis[:10]):
+                x1, y1, x2, y2 = pred_box.numpy()
+                score_val = score.item()
+                
+                # Draw prediction box
+                rect = patches.Rectangle(
+                    (x1*img.shape[1], y1*img.shape[0]), 
+                    (x2-x1)*img.shape[1], 
+                    (y2-y1)*img.shape[0],
+                    linewidth=2, edgecolor='red', facecolor='none', alpha=min(score_val, 1.0)
+                )
+                axes1[1].add_patch(rect)
+                # Add score text
+                axes1[1].text(x1*img.shape[1], y1*img.shape[0]-5, 
+                             f'{score_val:.2f}', color='red', fontsize=8, 
+                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            axes1[1].set_title(f"Predicted Boxes (top {len(pred_boxes_vis[:10])} detections)")
             axes1[1].axis("off")
             
             plt.tight_layout()
@@ -788,16 +764,17 @@ def run_training_loop(
     output_dir,
     fixed_vis_images,
     fixed_vis_boxes,
+    num_classes,
 ):
-    """Execute main training and evaluation loop"""
+    """Execute main training and evaluation loop with DETR"""
     best_loss = float('inf')
     best_map = 0.0
     val_metrics = {'loss': float('inf')}
     start_time = time.time()
     
     for epoch in range(args.epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, device, epoch)
-        val_metrics = evaluate(model, val_loader, device)
+        train_loss = train_epoch(model, train_loader, optimizer, device, epoch, num_classes)
+        val_metrics = evaluate(model, val_loader, device, num_classes)
         scheduler.step()
         
         elapsed_time = time.time() - start_time

@@ -35,7 +35,11 @@ class LinearSegmentationHead(nn.Module):
         # Official DINOv3 uses minimal architecture:
         # Dropout -> BatchNorm -> 1x1 Conv
         self.dropout = nn.Dropout2d(0.1)
-        self.bn = nn.SyncBatchNorm(self.channels) if use_bn else nn.Identity()
+        if use_bn:
+            # Use GroupNorm instead of BatchNorm for better stability with small batches
+            self.bn = nn.GroupNorm(32, self.channels)
+        else:
+            self.bn = nn.Identity()
         self.conv = nn.Conv2d(self.channels, num_classes, kernel_size=1)
         
         # Initialize like official implementation
@@ -66,6 +70,7 @@ class LinearSegmentationHead(nn.Module):
         x = self.dropout(x)
         x = self.bn(x)
         x = self.conv(x)
+        x = x.contiguous()
         
         # Ensure target_size is tuple of ints for interpolation
         if isinstance(target_size, torch.Tensor):
