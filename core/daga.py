@@ -3,6 +3,7 @@ import torch.nn as nn
 
 
 class AttentionEncoder(nn.Module):
+    """Encode attention map into instruction vector"""
     def __init__(self, instruction_dim=128):
         super().__init__()
         self.conv = nn.Conv2d(1, 64, kernel_size=3, padding=1)
@@ -28,6 +29,7 @@ class AttentionEncoder(nn.Module):
 
 
 class DynamicGateGenerator(nn.Module):
+    """Generate dynamic gate from instruction vector"""
     def __init__(self, instruction_dim=128, feature_dim=384):
         super().__init__()
         self.fc = nn.Linear(instruction_dim, feature_dim)
@@ -39,6 +41,7 @@ class DynamicGateGenerator(nn.Module):
 
 
 class FeatureTransformer(nn.Module):
+    """Transform features with residual connection"""
     def __init__(self, feature_dim=384, bottleneck_dim=96):
         super().__init__()
         self.fc1 = nn.Linear(feature_dim, bottleneck_dim)
@@ -63,6 +66,11 @@ class FeatureTransformer(nn.Module):
 
 
 class DAGA(nn.Module):
+    """
+    Dynamic Attention-Guided Adaptation
+    
+    Adapts frozen backbone features using attention-guided dynamic gating.
+    """
     def __init__(self, feature_dim=384, instruction_dim=128, bottleneck_dim=96):
         super().__init__()
         self.attention_encoder = AttentionEncoder(instruction_dim)
@@ -70,8 +78,14 @@ class DAGA(nn.Module):
         self.feature_transformer = FeatureTransformer(feature_dim, bottleneck_dim)
         self.mix_weight = nn.Parameter(torch.tensor(0.01))
 
-
     def forward(self, patch_features, attention_map):
+        """
+        Args:
+            patch_features: (B, N, D) patch tokens
+            attention_map: (B, H, W) attention guidance
+        Returns:
+            Adapted patch features (B, N, D)
+        """
         instruction = self.attention_encoder(attention_map)
         gate = self.gate_generator(instruction).unsqueeze(1)
         

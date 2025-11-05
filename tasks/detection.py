@@ -24,20 +24,24 @@ class DetectionModel(nn.Module):
         num_classes=80,
         use_daga=False,
         daga_layers=[11],
+        layers_to_use=[2, 5, 8, 11],  # Multi-layer features like official DINOv3
     ):
         super().__init__()
         self.vit = pretrained_vit
         self.num_classes = num_classes
         self.use_daga = use_daga
         self.daga_layers = daga_layers
+        self.layers_to_use = layers_to_use
         self.feature_dim = self.vit.embed_dim
         self.daga_guidance_layer_idx = len(self.vit.blocks) - 1
         
         self.num_storage_tokens = -1
         
+        # Freeze backbone
         for param in self.vit.parameters():
             param.requires_grad = False
         
+        # DAGA modules if enabled
         if self.use_daga:
             self.daga_modules = nn.ModuleDict(
                 {str(i): DAGA(feature_dim=self.feature_dim) for i in daga_layers}
@@ -45,14 +49,17 @@ class DetectionModel(nn.Module):
             for param in self.daga_modules.parameters():
                 param.requires_grad = True
         
-        self.detection_head = DetectionHead(self.feature_dim, num_classes)
+        # Detection head takes concatenated multi-layer features
+        total_feature_dim = self.feature_dim * len(layers_to_use)
+        self.detection_head = DetectionHead(total_feature_dim, num_classes)
         
         for param in self.detection_head.parameters():
             param.requires_grad = True
         
         print(
             f"✓ DetectionModel initialized:\n"
-            f"  - Feature dim: {self.feature_dim}\n"
+            f"  - Feature dim: {self.feature_dim} x {len(layers_to_use)} layers = {total_feature_dim}\n"
+            f"  - Layers to use: {layers_to_use}\n"
             f"  - Num classes: {num_classes}\n"
             f"  - Use DAGA: {self.use_daga} (Layers: {self.daga_layers if self.use_daga else 'N/A'})"
         )
@@ -71,10 +78,14 @@ class DetectionModel(nn.Module):
         daga_guidance_map = None
         adapted_attn_weights = None
         
+        # Compute DAGA guidance map if enabled
         if self.use_daga:
             daga_guidance_map = compute_daga_guidance_map(
                 self.vit, x_processed, H, W, self.daga_guidance_layer_idx
             )
+        
+        # Extract multi-layer features (similar to official DINOv3)
+        intermediate_features = []
         
         for idx, block in enumerate(self.vit.blocks):
             rope_sincos = self.vit.rope_embed(H=H, W=W) if self.vit.rope_embed else None
@@ -85,6 +96,7 @@ class DetectionModel(nn.Module):
             
             x_processed = block(x_processed, rope_sincos)
             
+            # Apply DAGA if needed
             if (
                 self.use_daga
                 and idx in self.daga_layers
@@ -102,11 +114,17 @@ class DetectionModel(nn.Module):
                 )
                 
                 x_processed = torch.cat([cls_token, register_tokens, adapted_patch_tokens], dim=1)
+            
+            # Collect intermediate layer features
+            if idx in self.layers_to_use:
+                patch_features = x_processed[:, 1 + num_registers:, :]
+                feat_spatial = patch_features.transpose(1, 2).reshape(B, C, H, W)
+                intermediate_features.append(feat_spatial)
         
-        patch_features = x_processed[:, 1 + num_registers:, :]
-        feat_spatial = patch_features.transpose(1, 2).reshape(B, C, H, W)
+        # Concatenate multi-layer features
+        multi_layer_features = torch.cat(intermediate_features, dim=1)
         
-        cls_output, bbox_output, obj_output = self.detection_head(feat_spatial)
+        cls_output, bbox_output, obj_output = self.detection_head(multi_layer_features)
         
         return cls_output, bbox_output, obj_output, adapted_attn_weights, daga_guidance_map
 
@@ -154,25 +172,75 @@ def setup_training_components(model, args):
     return optimizer, scheduler
 
 
+def generalized_box_iou(boxes1, boxes2):
+    """
+    Compute Generalized IoU between two sets of boxes.
+    Args:
+        boxes1: (N, 4) in format [x1, y1, x2, y2]
+        boxes2: (N, 4) in format [x1, y1, x2, y2]
+    Returns:
+        GIoU values (N,)
+    """
+    # Intersection area
+    inter_x1 = torch.max(boxes1[:, 0], boxes2[:, 0])
+    inter_y1 = torch.max(boxes1[:, 1], boxes2[:, 1])
+    inter_x2 = torch.min(boxes1[:, 2], boxes2[:, 2])
+    inter_y2 = torch.min(boxes1[:, 3], boxes2[:, 3])
+    
+    inter_w = (inter_x2 - inter_x1).clamp(min=0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0)
+    inter_area = inter_w * inter_h
+    
+    # Union area
+    boxes1_area = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    boxes2_area = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+    union_area = boxes1_area + boxes2_area - inter_area
+    
+    # IoU
+    iou = inter_area / (union_area + 1e-7)
+    
+    # Smallest enclosing box
+    enclosing_x1 = torch.min(boxes1[:, 0], boxes2[:, 0])
+    enclosing_y1 = torch.min(boxes1[:, 1], boxes2[:, 1])
+    enclosing_x2 = torch.max(boxes1[:, 2], boxes2[:, 2])
+    enclosing_y2 = torch.max(boxes1[:, 3], boxes2[:, 3])
+    
+    enclosing_area = (enclosing_x2 - enclosing_x1) * (enclosing_y2 - enclosing_y1)
+    
+    # GIoU
+    giou = iou - (enclosing_area - union_area) / (enclosing_area + 1e-7)
+    
+    return giou
+
+
+def focal_loss(pred, target, alpha=0.25, gamma=2.0):
+    """
+    Focal Loss for classification (handles class imbalance)
+    """
+    ce_loss = F.cross_entropy(pred, target, reduction='none')
+    p_t = torch.exp(-ce_loss)
+    focal_weight = alpha * (1 - p_t) ** gamma
+    return (focal_weight * ce_loss).mean()
+
+
 def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     """
-    Simplified detection loss with classification, bbox regression, and objectness.
-    Uses a simple center-based assignment strategy.
+    Improved detection loss with Focal Loss and GIoU Loss.
     
     Args:
-        cls_pred: (B, num_anchors * num_classes, H, W) - class predictions
-        bbox_pred: (B, num_anchors * 4, H, W) - bbox predictions (x1, y1, x2, y2 normalized)
-        obj_pred: (B, num_anchors, H, W) - objectness predictions
-        boxes_list: list of (N, 4) tensors - GT boxes per image (normalized)
-        labels_list: list of (N,) tensors - GT labels per image
+        cls_pred: (B, num_anchors * num_classes, H, W)
+        bbox_pred: (B, num_anchors * 4, H, W)
+        obj_pred: (B, num_anchors, H, W)
+        boxes_list: list of (N, 4) tensors - GT boxes (normalized [0,1])
+        labels_list: list of (N,) tensors - GT labels
     """
     device = cls_pred.device
     batch_size = cls_pred.size(0)
-    num_anchors = 3  # From DetectionHead
+    num_anchors = 3
     num_classes = cls_pred.size(1) // num_anchors
     H, W = cls_pred.size(2), cls_pred.size(3)
     
-    # Reshape predictions to separate anchors
+    # Reshape predictions
     cls_pred = cls_pred.view(batch_size, num_anchors, num_classes, H, W)
     bbox_pred = bbox_pred.view(batch_size, num_anchors, 4, H, W)
     obj_pred = obj_pred.view(batch_size, num_anchors, H, W)
@@ -183,77 +251,62 @@ def detection_loss(cls_pred, bbox_pred, obj_pred, boxes_list, labels_list):
     num_pos_samples = 0
     
     for b in range(batch_size):
-        boxes = boxes_list[b]  # (N, 4) normalized boxes
-        labels = labels_list[b]  # (N,)
+        boxes = boxes_list[b]
+        labels = labels_list[b]
         
-        # Create objectness target map
         obj_target = torch.zeros(num_anchors, H, W, device=device)
         
         if len(boxes) > 0:
-            # Convert normalized boxes to feature map coordinates
+            # Convert normalized boxes to feature map scale
             boxes_fm = boxes.clone()
             boxes_fm[:, [0, 2]] *= W
             boxes_fm[:, [1, 3]] *= H
             
-            # Get box centers
+            # Center-based assignment
             cx = (boxes_fm[:, 0] + boxes_fm[:, 2]) / 2
             cy = (boxes_fm[:, 1] + boxes_fm[:, 3]) / 2
             
-            # Assign positive samples based on centers
             for i in range(len(boxes)):
-                # Validate label FIRST (on CPU to avoid CUDA errors)
                 label_i = int(labels[i].cpu().item())
                 if label_i < 0 or label_i >= num_classes:
-                    print(f"Warning: Invalid label {label_i} (num_classes={num_classes}), skipping")
                     continue
                 
                 cx_int = int(cx[i].clamp(0, W-1).cpu().item())
                 cy_int = int(cy[i].clamp(0, H-1).cpu().item())
                 
-                # Use first anchor for simplicity
-                anchor_idx = 0
+                anchor_idx = 0  # Use first anchor
                 
-                # Mark center location as positive
                 obj_target[anchor_idx, cy_int, cx_int] = 1.0
                 num_pos_samples += 1
                 
-                # Simple classification loss at center
-                label_tensor = labels[i:i+1]
+                # Focal Loss for classification
                 pred_logits = cls_pred[b, anchor_idx, :, cy_int, cx_int].unsqueeze(0)
+                total_cls_loss += focal_loss(pred_logits, labels[i:i+1])
                 
-                # Debug: print shapes and values
-                if label_i >= num_classes or label_i < 0:
-                    print(f"FATAL: Label {label_i} out of range [0, {num_classes})")
-                    print(f"  Prediction shape: {pred_logits.shape}")
-                    print(f"  Label tensor: {label_tensor}")
-                    continue
-                
-                total_cls_loss += F.cross_entropy(
-                    pred_logits,
-                    label_tensor,
-                    reduction='sum'
-                )
-                
-                # Bbox regression loss (L1 loss)
-                pred_box = bbox_pred[b, anchor_idx, :, cy_int, cx_int]  # (4,)
-                total_bbox_loss += F.l1_loss(pred_box, boxes[i], reduction='sum')
+                # GIoU Loss for bbox
+                pred_box = bbox_pred[b, anchor_idx, :, cy_int, cx_int]
+                giou = generalized_box_iou(pred_box.unsqueeze(0), boxes[i].unsqueeze(0))
+                total_bbox_loss += (1.0 - giou).mean()
         
-        # Objectness loss (BCE with logits)
-        total_obj_loss += F.binary_cross_entropy_with_logits(
-            obj_pred[b],
-            obj_target,
-            reduction='sum'
-        )
+        # Binary focal loss for objectness
+        obj_pos = obj_pred[b][obj_target == 1]
+        obj_neg = obj_pred[b][obj_target == 0]
+        
+        if len(obj_pos) > 0:
+            pos_loss = F.binary_cross_entropy_with_logits(obj_pos, torch.ones_like(obj_pos), reduction='mean')
+            total_obj_loss += pos_loss
+        
+        if len(obj_neg) > 0:
+            neg_loss = F.binary_cross_entropy_with_logits(obj_neg, torch.zeros_like(obj_neg), reduction='mean')
+            total_obj_loss += neg_loss * 0.1  # Reduced weight for negative samples
     
-    # Normalize losses
-    num_pos_samples = max(num_pos_samples, 1)  # Avoid division by zero
-    total_pixels = batch_size * num_anchors * H * W
-    
+    # Normalize
+    num_pos_samples = max(num_pos_samples, 1)
     cls_loss = total_cls_loss / num_pos_samples
     bbox_loss = total_bbox_loss / num_pos_samples
-    obj_loss = total_obj_loss / total_pixels
+    obj_loss = total_obj_loss / batch_size
     
-    # Combine losses with weights
+    # Combined loss
     loss = cls_loss + 2.0 * bbox_loss + 0.5 * obj_loss
     
     return loss

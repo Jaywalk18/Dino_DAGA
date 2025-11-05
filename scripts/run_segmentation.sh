@@ -1,8 +1,8 @@
 #!/bin/bash
-# run_segmentation.sh
+# Segmentation training script following official DINOv3 configuration
 set -e
 
-# --- Configuration ---
+# Configuration
 DATASET="ade20k"
 MODEL_NAME="dinov3_vits16"
 PRETRAINED_PATH="dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
@@ -11,32 +11,33 @@ BASE_OUTPUT_DIR="outputs/segmentation"
 GPU_IDS=${1:-"1,2,3,4,5,6"}
 SEED=42
 
-# --- Hyperparameters ---
-EPOCHS=1
-BATCH_SIZE=16
+# Training hyperparameters (aligned with official: 40K iterations)
+# For ADE20K ~20K train images, 40K iters ≈ 32 epochs with BS=16
+EPOCHS=40  # Increased from 1 to 40
+BATCH_SIZE=16  # 2 per GPU recommended
 INPUT_SIZE=518
-LR=1e-4
-MAX_SAMPLES=2000  # ~10% of ADE20K train set (20K images)
+LR=1e-3  # Higher LR for segmentation (official uses 1e-3)
+MAX_SAMPLES=  # Empty = use full dataset
+OUT_INDICES="2 5 8 11"  # Multi-layer features
 
-# --- Setup ---
+# Setup
 PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
 CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 cd $PROJECT_ROOT
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 mkdir -p "$BASE_OUTPUT_DIR"
-echo "🚀 Starting DINOv3 Segmentation on ${DATASET}..."
+echo "🚀 DINOv3 Segmentation Training"
 echo "==================================================================="
-echo "  DINOv3 Model:      ${MODEL_NAME}"
-echo "  GPU IDs:           ${GPU_IDS}"
-echo "  Training Samples:  ${MAX_SAMPLES} (~10% of dataset)"
-echo "  Hyperparameters:"
-echo "    - Epochs:        ${EPOCHS}"
-echo "    - Batch Size:    ${BATCH_SIZE}"
-echo "    - Learning Rate: ${LR}"
+echo "  Model:      ${MODEL_NAME}"
+echo "  GPU IDs:    ${GPU_IDS}"
+echo "  Epochs:     ${EPOCHS}"
+echo "  Batch Size: ${BATCH_SIZE}"
+echo "  LR:         ${LR}"
+echo "  Out Layers: ${OUT_INDICES}"
 echo "==================================================================="
 
-# --- Helper function for running experiments ---
+# Helper function
 run_experiment() {
     local exp_name=$1
     local description=$2
@@ -45,7 +46,7 @@ run_experiment() {
     local output_subdir="${BASE_OUTPUT_DIR}/${exp_name}"
     mkdir -p "$output_subdir"
 
-    echo -e "\n▶️  Running Experiment: ${description}"
+    echo -e "\n▶️  ${description}"
 
     CUDA_VISIBLE_DEVICES=$GPU_IDS python main_segmentation.py \
         --seed "$SEED" \
@@ -57,32 +58,20 @@ run_experiment() {
         --batch_size "$BATCH_SIZE" \
         --input_size "$INPUT_SIZE" \
         --lr "$LR" \
-        --max_samples "$MAX_SAMPLES" \
         --output_dir "$output_subdir" \
         --enable_visualization \
         --num_vis_samples 4 \
-        --log_freq 20 \
-        --out_indices 2 5 8 11 \
+        --log_freq 5 \
+        --out_indices $OUT_INDICES \
         "$@"
 
-    if [ $? -eq 0 ]; then
-        echo "✅  SUCCESS: ${description}"
-    else
-        echo "❌  FAILED: ${description}"
-        exit 1
-    fi
+    [ $? -eq 0 ] && echo "✅  SUCCESS" || (echo "❌  FAILED" && exit 1)
 }
 
-# --- Experiment Runs ---
+# Experiments
+run_experiment "01_baseline" "Baseline (Lightweight Head)"
 
-run_experiment \
-    "01_baseline" \
-    "Baseline (Linear Segmentation Head on DINOv3)"
+run_experiment "02_daga_last_layer" "DAGA Single Layer (L11)" \
+    --use_daga --daga_layers 11
 
-run_experiment \
-    "02_daga_last_layer" \
-    "DAGA Single Layer (L11)" \
-    --use_daga \
-    --daga_layers 11
-
-echo -e "\n🎉 All segmentation experiments completed successfully!"
+echo -e "\n🎉 Segmentation training completed!"

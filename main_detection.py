@@ -69,6 +69,13 @@ def parse_arguments():
         default=[11],
         help="Layers to apply DAGA",
     )
+    parser.add_argument(
+        "--layers_to_use",
+        type=int,
+        nargs="+",
+        default=[2, 5, 8, 11],
+        help="Backbone layers to extract features from (default: [2, 5, 8, 11] for ViT-S/B)",
+    )
     
     parser.add_argument("--input_size", type=int, default=518, help="Input image size")
     parser.add_argument("--epochs", type=int, default=20, help="Number of epochs")
@@ -147,6 +154,7 @@ def main():
         num_classes=num_classes,
         use_daga=args.use_daga,
         daga_layers=args.daga_layers,
+        layers_to_use=args.layers_to_use,
     )
     
     model.to(device)
