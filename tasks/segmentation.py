@@ -221,8 +221,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch):
         
         with torch.no_grad():
             preds = logits.argmax(dim=1)
+            # Access num_classes from DDP wrapped model
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            num_classes = model.module.num_classes if isinstance(model, (DataParallel, DDP)) else model.num_classes
             for i in range(images.size(0)):
-                miou = calculate_miou(preds[i], masks[i], model.module.num_classes if isinstance(model, DataParallel) else model.num_classes)
+                miou = calculate_miou(preds[i], masks[i], num_classes)
                 total_miou += miou
                 num_samples += 1
         
@@ -284,8 +287,12 @@ def visualize_segmentation_results(
     base_model.eval()
     vis_figs = []
     
+    # Get actual model from DDP wrapper if needed
+    from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
+    actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
+    
     with torch.no_grad():
-        _, (H, W) = base_model.vit.prepare_tokens_with_masks(fixed_images)
+        _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
         
         logits, adapted_attn_weights, _ = base_model(
@@ -300,17 +307,17 @@ def visualize_segmentation_results(
         if adapted_attn_weights is not None:
             adapted_attn_np = process_attention_weights(adapted_attn_weights, num_patches_expected, H, W)
             
-            x_proc, _ = base_model.vit.prepare_tokens_with_masks(fixed_images)
+            x_proc, _ = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
             baseline_raw_weights = None
-            for i in range(base_model.daga_guidance_layer_idx + 1):
+            for i in range(actual_base_model.daga_guidance_layer_idx + 1):
                 rope_sincos = (
-                    base_model.vit.rope_embed(H=H, W=W)
-                    if base_model.vit.rope_embed
+                    actual_base_model.vit.rope_embed(H=H, W=W)
+                    if actual_base_model.vit.rope_embed
                     else None
                 )
-                if i == base_model.daga_guidance_layer_idx:
-                    baseline_raw_weights = get_attention_map(base_model.vit.blocks[i], x_proc)
-                x_proc = base_model.vit.blocks[i](x_proc, rope_sincos)
+                if i == actual_base_model.daga_guidance_layer_idx:
+                    baseline_raw_weights = get_attention_map(actual_base_model.vit.blocks[i], x_proc)
+                x_proc = actual_base_model.vit.blocks[i](x_proc, rope_sincos)
             
             if baseline_raw_weights is not None:
                 baseline_attn_np = process_attention_weights(baseline_raw_weights, num_patches_expected, H, W)
@@ -411,13 +418,20 @@ def run_training_loop(
     fixed_vis_images,
     fixed_vis_masks,
     num_classes,
+    rank=0,
+    world_size=1,
 ):
     """Execute main training and evaluation loop"""
+    is_main_process = (rank == 0)
     best_miou = 0.0
     val_miou = 0.0  # Initialize val_miou
     start_time = time.time()
     
     for epoch in range(args.epochs):
+        # Set epoch for DistributedSampler
+        if hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
+        
         train_loss, train_miou = train_epoch(
             model, train_loader, criterion, optimizer, device, epoch
         )
@@ -425,51 +439,55 @@ def run_training_loop(
         scheduler.step()
         
         elapsed_time = time.time() - start_time
-        print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
-        print(
-            f"   Train Loss: {train_loss:.4f} | Train mIoU: {train_miou:.2f}%"
-        )
-        print(
-            f"   Val mIoU: {val_miou:.2f}% | Val Pixel Acc: {val_pixel_acc:.2f}%"
-        )
-        print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
         
-        log_dict = {
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "train_miou": train_miou,
-            "val_miou": val_miou,
-            "val_pixel_acc": val_pixel_acc,
-            "learning_rate": optimizer.param_groups[0]["lr"],
-            "total_time_minutes": elapsed_time / 60,
-        }
-        
-        if args.enable_visualization and (
-            epoch % args.log_freq == 0 or epoch == args.epochs - 1
-        ):
-            print("📊 Generating segmentation visualizations...")
-            vis_figs = visualize_segmentation_results(
-                model, fixed_vis_images, fixed_vis_masks, args, output_dir, epoch
+        # Only print on main process
+        if is_main_process:
+            print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
+            print(
+                f"   Train Loss: {train_loss:.4f} | Train mIoU: {train_miou:.2f}%"
             )
-            if vis_figs:
-                log_dict["segmentation_results"] = [
-                    swanlab.Image(fig) for fig in vis_figs
-                ]
-        
-        swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
-        
-        if val_miou > best_miou:
-            best_miou = val_miou
-            save_path = output_dir / "best_model.pth"
-            from core.utils import save_checkpoint
-            save_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                best_miou,
-                args,
-                save_path,
+            print(
+                f"   Val mIoU: {val_miou:.2f}% | Val Pixel Acc: {val_pixel_acc:.2f}%"
             )
-            print(f"   ✅ New best model saved! (Val mIoU: {best_miou:.2f}%)")
+            print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
+        
+        if is_main_process:
+            log_dict = {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "train_miou": train_miou,
+                "val_miou": val_miou,
+                "val_pixel_acc": val_pixel_acc,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "total_time_minutes": elapsed_time / 60,
+            }
+            
+            if args.enable_visualization and fixed_vis_images is not None and (
+                epoch % args.log_freq == 0 or epoch == args.epochs - 1
+            ):
+                print("📊 Generating segmentation visualizations...")
+                vis_figs = visualize_segmentation_results(
+                    model, fixed_vis_images, fixed_vis_masks, args, output_dir, epoch
+                )
+                if vis_figs:
+                    log_dict["segmentation_results"] = [
+                        swanlab.Image(fig) for fig in vis_figs
+                    ]
+            
+            swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
+            
+            if val_miou > best_miou:
+                best_miou = val_miou
+                save_path = output_dir / "best_model.pth"
+                from core.utils import save_checkpoint
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch,
+                    best_miou,
+                    args,
+                    save_path,
+                )
+                print(f"   ✅ New best model saved! (Val mIoU: {best_miou:.2f}%)")
     
     return best_miou, val_miou, (time.time() - start_time) / 60

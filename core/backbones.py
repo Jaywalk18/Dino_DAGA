@@ -15,21 +15,45 @@ def load_dinov3_backbone(model_name, pretrained_path, dinov3_repo_path=None):
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Checkpoint not found: {weights_path}")
     
-    print(f"✓ Loading checkpoint from: {weights_path}")
+    import torch.distributed as dist
     
-    vit_model = torch.hub.load(
-        dinov3_repo_path,
-        model_name,
-        source='local',
-        weights=weights_path
-    )
+    # Only print from rank 0 or if not in distributed mode
+    should_print = not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0
     
-    print(f"\n[DEBUG] Model loaded:")
-    print(f"  embed_dim: {vit_model.embed_dim}")
-    print(f"  n_storage_tokens: {getattr(vit_model, 'n_storage_tokens', 0)}")
-    if hasattr(vit_model, "storage_tokens"):
-        print(f"  storage_tokens shape: {vit_model.storage_tokens.shape}")
-    print(f"  cls_token shape: {vit_model.cls_token.shape}")
+    if should_print:
+        print(f"✓ Loading checkpoint from: {weights_path}")
+    
+    # In DDP environment, make model loading sequential to avoid race conditions
+    if dist.is_available() and dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        
+        # Load models sequentially by rank to avoid file system contention
+        for r in range(world_size):
+            if rank == r:
+                vit_model = torch.hub.load(
+                    dinov3_repo_path,
+                    model_name,
+                    source='local',
+                    weights=weights_path
+                )
+            # Wait for current rank to finish before next rank starts
+            dist.barrier()
+    else:
+        vit_model = torch.hub.load(
+            dinov3_repo_path,
+            model_name,
+            source='local',
+            weights=weights_path
+        )
+    
+    if should_print:
+        print(f"\n[DEBUG] Model loaded:")
+        print(f"  embed_dim: {vit_model.embed_dim}")
+        print(f"  n_storage_tokens: {getattr(vit_model, 'n_storage_tokens', 0)}")
+        if hasattr(vit_model, "storage_tokens"):
+            print(f"  storage_tokens shape: {vit_model.storage_tokens.shape}")
+        print(f"  cls_token shape: {vit_model.cls_token.shape}")
     
     return vit_model
 

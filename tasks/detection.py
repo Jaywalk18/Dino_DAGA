@@ -765,65 +765,76 @@ def run_training_loop(
     fixed_vis_images,
     fixed_vis_boxes,
     num_classes,
+    rank=0,
+    world_size=1,
 ):
     """Execute main training and evaluation loop with DETR"""
+    is_main_process = (rank == 0)
     best_loss = float('inf')
     best_map = 0.0
     val_metrics = {'loss': float('inf')}
     start_time = time.time()
     
     for epoch in range(args.epochs):
+        # Set epoch for DistributedSampler
+        if hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
+        
         train_loss = train_epoch(model, train_loader, optimizer, device, epoch, num_classes)
         val_metrics = evaluate(model, val_loader, device, num_classes)
         scheduler.step()
         
         elapsed_time = time.time() - start_time
-        print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
-        print(f"   Train Loss: {train_loss:.4f} | Val Loss: {val_metrics['loss']:.4f}")
-        print(f"   mAP: {val_metrics['mAP']:.2f}% | Precision: {val_metrics['precision']:.2f}% | Recall: {val_metrics['recall']:.2f}%")
-        print(f"   TP: {val_metrics['tp']} | FP: {val_metrics['fp']} | GT: {val_metrics['total_gt']}")
-        print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
         
-        log_dict = {
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "val_loss": val_metrics['loss'],
-            "val_mAP": val_metrics['mAP'],
-            "val_precision": val_metrics['precision'],
-            "val_recall": val_metrics['recall'],
-            "val_f1": val_metrics['f1'],
-            "learning_rate": optimizer.param_groups[0]["lr"],
-            "total_time_minutes": elapsed_time / 60,
-        }
+        # Only print on main process
+        if is_main_process:
+            print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
+            print(f"   Train Loss: {train_loss:.4f} | Val Loss: {val_metrics['loss']:.4f}")
+            print(f"   mAP: {val_metrics['mAP']:.2f}% | Precision: {val_metrics['precision']:.2f}% | Recall: {val_metrics['recall']:.2f}%")
+            print(f"   TP: {val_metrics['tp']} | FP: {val_metrics['fp']} | GT: {val_metrics['total_gt']}")
+            print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
         
-        if args.enable_visualization and (
-            epoch % args.log_freq == 0 or epoch == args.epochs - 1
-        ):
-            print("📊 Generating detection visualizations...")
-            vis_figs = visualize_detection_results(
-                model, fixed_vis_images, fixed_vis_boxes, args, output_dir, epoch
-            )
-            if vis_figs:
-                log_dict["detection_results"] = [
-                    swanlab.Image(fig) for fig in vis_figs
-                ]
-        
-        swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
-        
-        # Save best model based on mAP
-        if val_metrics['mAP'] > best_map:
-            best_map = val_metrics['mAP']
-            best_loss = val_metrics['loss']
-            save_path = output_dir / "best_model.pth"
-            from core.utils import save_checkpoint
-            save_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                best_loss,
-                args,
-                save_path,
-            )
-            print(f"   ✅ New best model saved! (mAP: {best_map:.2f}%, Loss: {best_loss:.4f})")
+        if is_main_process:
+            log_dict = {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": val_metrics['loss'],
+                "val_mAP": val_metrics['mAP'],
+                "val_precision": val_metrics['precision'],
+                "val_recall": val_metrics['recall'],
+                "val_f1": val_metrics['f1'],
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "total_time_minutes": elapsed_time / 60,
+            }
+            
+            if args.enable_visualization and fixed_vis_images is not None and (
+                epoch % args.log_freq == 0 or epoch == args.epochs - 1
+            ):
+                print("📊 Generating detection visualizations...")
+                vis_figs = visualize_detection_results(
+                    model, fixed_vis_images, fixed_vis_boxes, args, output_dir, epoch
+                )
+                if vis_figs:
+                    log_dict["detection_results"] = [
+                        swanlab.Image(fig) for fig in vis_figs
+                    ]
+            
+            swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
+            
+            # Save best model based on mAP
+            if val_metrics['mAP'] > best_map:
+                best_map = val_metrics['mAP']
+                best_loss = val_metrics['loss']
+                save_path = output_dir / "best_model.pth"
+                from core.utils import save_checkpoint
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch,
+                    best_loss,
+                    args,
+                    save_path,
+                )
+                print(f"   ✅ New best model saved! (mAP: {best_map:.2f}%, Loss: {best_loss:.4f})")
     
     return best_loss, val_metrics, (time.time() - start_time) / 60

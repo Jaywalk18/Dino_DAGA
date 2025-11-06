@@ -224,8 +224,12 @@ def visualize_attention_comparison(
     
     class_names = getattr(test_dataset, "classes", None)
     
+    # Get actual model from DDP wrapper if needed
+    from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
+    actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
+    
     with torch.no_grad():
-        _, (H, W) = base_model.vit.prepare_tokens_with_masks(fixed_images)
+        _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
         
         logits, adapted_attn_weights, _ = base_model(
@@ -242,27 +246,30 @@ def visualize_attention_comparison(
         
         predictions = logits.argmax(dim=1).cpu().numpy()
         
+        # Get visualization layer from actual base model (unwrapped)
+        vis_attn_layer = actual_base_model.vis_attn_layer
+        
         with torch.no_grad():
-            x_proc, (H_baseline, W_baseline) = base_model.vit.prepare_tokens_with_masks(fixed_images)
+            x_proc, (H_baseline, W_baseline) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
             assert H == H_baseline and W == W_baseline
             
             baseline_raw_weights = None
-            for i in range(base_model.vis_attn_layer + 1):
+            for i in range(vis_attn_layer + 1):
                 rope_sincos = (
-                    base_model.vit.rope_embed(H=H, W=W)
-                    if base_model.vit.rope_embed
+                    actual_base_model.vit.rope_embed(H=H, W=W)
+                    if actual_base_model.vit.rope_embed
                     else None
                 )
                 
-                if i == base_model.vis_attn_layer:
+                if i == vis_attn_layer:
                     baseline_raw_weights = get_attention_map(
-                        base_model.vit.blocks[i], x_proc
+                        actual_base_model.vit.blocks[i], x_proc
                     )
                 
-                x_proc = base_model.vit.blocks[i](x_proc, rope_sincos)
+                x_proc = actual_base_model.vit.blocks[i](x_proc, rope_sincos)
         
         if baseline_raw_weights is None:
-            print(f"⚠ Warning: Failed to extract baseline attention weights from layer {base_model.vis_attn_layer}.")
+            print(f"⚠ Warning: Failed to extract baseline attention weights from layer {vis_attn_layer}.")
             return []
         
         baseline_attn_np = process_attention_weights(baseline_raw_weights, num_patches_expected, H, W)
@@ -300,14 +307,14 @@ def visualize_attention_comparison(
             axes[0].axis("off")
             
             axes[1].imshow(baseline_attn_np[j], cmap="viridis")
-            axes[1].set_title(f"Frozen Backbone Attn (L{base_model.vis_attn_layer})")
+            axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
             axes[1].axis("off")
             
-            is_daga_model = getattr(base_model, "use_daga", False)
+            is_daga_model = getattr(actual_base_model, "use_daga", False)
             adapted_title = (
-                f"Adapted (DAGA) Attn (L{base_model.vis_attn_layer})"
+                f"Adapted (DAGA) Attn (L{vis_attn_layer})"
                 if is_daga_model
-                else f"Finetuned Model Attn (L{base_model.vis_attn_layer})"
+                else f"Finetuned Model Attn (L{vis_attn_layer})"
             )
             axes[2].imshow(adapted_attn_np[j], cmap="viridis")
             axes[2].set_title(adapted_title)
@@ -349,12 +356,19 @@ def run_training_loop(
     output_dir,
     fixed_vis_images,
     test_dataset=None,
+    rank=0,
+    world_size=1,
 ):
     """Execute main training and evaluation loop"""
+    is_main_process = (rank == 0)
     best_acc = 0.0
     start_time = time.time()
     
     for epoch in range(args.epochs):
+        # Set epoch for DistributedSampler
+        if hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
+        
         train_loss, train_acc = train_epoch(
             model, train_loader, criterion, optimizer, device, epoch
         )
@@ -362,22 +376,26 @@ def run_training_loop(
         scheduler.step()
         
         elapsed_time = time.time() - start_time
-        print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
-        print(
-            f"   Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%"
-        )
-        print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
         
-        log_dict = {
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "train_accuracy": train_acc,
+        # Only print on main process
+        if is_main_process:
+            print(f"\n📈 Epoch {epoch+1}/{args.epochs} Summary:")
+            print(
+                f"   Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%"
+            )
+            print(f"   Time Elapsed: {elapsed_time/60:.1f}min")
+        
+        if is_main_process:
+            log_dict = {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "train_accuracy": train_acc,
             "test_accuracy": test_acc,
             "learning_rate": optimizer.param_groups[0]["lr"],
             "total_time_minutes": elapsed_time / 60,
         }
         
-        if args.enable_visualization and (
+        if args.enable_visualization and fixed_vis_images is not None and (
             epoch % args.log_freq == 0 or epoch == args.epochs - 1
         ):
             print("📊 Generating attention visualizations...")

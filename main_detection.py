@@ -1,14 +1,16 @@
 import torch
 import torch.nn as nn
-from torch.nn.parallel import DataParallel
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 import argparse
 from pathlib import Path
 import warnings
+import os
 
 from core.backbones import load_dinov3_backbone
 from core.utils import setup_environment, setup_logging, finalize_experiment
+from core.ddp_utils import setup_ddp, cleanup_ddp, create_ddp_dataloaders
 from data.detection_datasets import get_detection_dataset, detection_collate_fn
-from torch.utils.data import DataLoader
 from tasks.detection import (
     DetectionModel, 
     setup_training_components, 
@@ -17,7 +19,6 @@ from tasks.detection import (
 )
 
 warnings.filterwarnings("ignore")
-import os
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 
 
@@ -110,17 +111,33 @@ def parse_arguments():
 
 
 def main():
+    # Setup DDP
+    local_rank, rank, world_size = setup_ddp()
+    is_main_process = (rank == 0)
+    
     args = parse_arguments()
-    setup_environment(args.seed)
+    setup_environment(args.seed + rank)
     
-    experiment_name = setup_logging(args, task_name="detection")
-    output_dir = Path(args.output_dir) / experiment_name
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process:
+        experiment_name = setup_logging(args, task_name="detection")
+        output_dir = Path(args.output_dir) / experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        output_dir = None
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Broadcast output_dir to all processes
+    output_dir_list = [str(output_dir)] if is_main_process else [None]
+    dist.broadcast_object_list(output_dir_list, src=0)
+    if not is_main_process:
+        output_dir = Path(output_dir_list[0])
     
-    print(f"\n{'='*70}")
-    print(f"Loading {args.dataset.upper()} dataset...")
+    device = torch.device(f"cuda:{local_rank}")
+    
+    if is_main_process:
+        print(f"\n{'='*70}")
+        print(f"DDP Training with {world_size} GPUs")
+        print(f"Loading {args.dataset.upper()} dataset...")
+    
     train_dataset, val_dataset, num_classes = get_detection_dataset(args)
     
     limit_train = None
@@ -147,30 +164,25 @@ def main():
         if limit_val < len(val_dataset):
             val_indices = random.sample(range(len(val_dataset)), limit_val)
             val_dataset = torch.utils.data.Subset(val_dataset, val_indices)
-        print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val (limited) samples")
+        if is_main_process:
+            print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val (limited) samples")
     else:
-        print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
-    print(f"  Number of classes: {num_classes}")
+        if is_main_process:
+            print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
     
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=8,
-        pin_memory=True,
-        collate_fn=detection_collate_fn,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-        collate_fn=detection_collate_fn,
+    if is_main_process:
+        print(f"  Number of classes: {num_classes}")
+        print(f"  Batch size per GPU: {args.batch_size}")
+        print(f"  Effective batch size: {args.batch_size * world_size}")
+    
+    train_loader, val_loader = create_ddp_dataloaders(
+        train_dataset, val_dataset, args.batch_size, world_size, rank,
+        collate_fn=detection_collate_fn
     )
     
-    print(f"\n{'='*70}")
-    print(f"Loading DINOv3 model '{args.model_name}'...")
+    if is_main_process:
+        print(f"\n{'='*70}")
+        print(f"Loading DINOv3 model '{args.model_name}'...")
     vit_model = load_dinov3_backbone(args.model_name, args.pretrained_path)
     
     model = DetectionModel(
@@ -182,46 +194,68 @@ def main():
     )
     
     model.to(device)
-    print(f"\n✓ Model moved to device: {device}")
     
-    if torch.cuda.device_count() > 1:
-        print(f"  Using {torch.cuda.device_count()} GPUs")
-        model = DataParallel(model)
+    # Wrap model with DDP
+    # Auto-detect if we need find_unused_parameters (required when using DAGA as some parameters are frozen)
+    has_frozen_params = any(not p.requires_grad for p in model.parameters())
+    model = DDP(
+        model, 
+        device_ids=[local_rank], 
+        output_device=local_rank, 
+        find_unused_parameters=has_frozen_params,  # True for DAGA, False for baseline
+        broadcast_buffers=False,  # Reduce communication overhead
+        gradient_as_bucket_view=True  # More efficient gradient handling
+    )
+    
+    if is_main_process:
+        frozen_status = "with frozen params (DAGA)" if has_frozen_params else "all trainable (baseline)"
+        print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({frozen_status})")
     
     optimizer, scheduler = setup_training_components(model, args)
     
-    fixed_vis_images, fixed_vis_boxes = prepare_visualization_data(val_dataset, args, device)
+    # Only prepare visualization on main process
+    if is_main_process:
+        fixed_vis_images, fixed_vis_boxes = prepare_visualization_data(val_dataset, args, device)
+    else:
+        fixed_vis_images, fixed_vis_boxes = None, None
     
-    print(f"\n{'='*70}")
-    print("Starting training...")
-    print(f"{'='*70}\n")
+    if is_main_process:
+        print(f"\n{'='*70}")
+        print("Starting training...")
+        print(f"{'='*70}\n")
     
-    best_loss, final_metrics, total_time = run_training_loop(
-        model,
-        train_loader,
-        val_loader,
-        optimizer,
-        scheduler,
-        device,
-        args,
-        output_dir,
-        fixed_vis_images,
-        fixed_vis_boxes,
-        num_classes,
-    )
-    
-    print(f'\n{"="*70}\n🎉 Training Completed!\n{"="*70}')
-    print(f"Total Time:       {total_time:.1f} minutes")
-    print(f"Best Val Loss:    {best_loss:.4f}")
-    print(f"Final Val Loss:   {final_metrics['loss']:.4f}")
-    print(f"Final mAP:        {final_metrics['mAP']:.2f}%")
-    print(f"Final Precision:  {final_metrics['precision']:.2f}%")
-    print(f"Final Recall:     {final_metrics['recall']:.2f}%")
-    print(f"Results saved to: {output_dir}\n{'='*70}\n")
-    
-    if args.enable_swanlab:
-        import swanlab
-        swanlab.finish()
+    try:
+        best_loss, final_metrics, total_time = run_training_loop(
+            model,
+            train_loader,
+            val_loader,
+            optimizer,
+            scheduler,
+            device,
+            args,
+            output_dir,
+            fixed_vis_images,
+            fixed_vis_boxes,
+            num_classes,
+            rank=rank,
+            world_size=world_size,
+        )
+        
+        if is_main_process:
+            print(f'\n{"="*70}\n🎉 Training Completed!\n{"="*70}')
+            print(f"Total Time:       {total_time:.1f} minutes")
+            print(f"Best Val Loss:    {best_loss:.4f}")
+            print(f"Final Val Loss:   {final_metrics['loss']:.4f}")
+            print(f"Final mAP:        {final_metrics['mAP']:.2f}%")
+            print(f"Final Precision:  {final_metrics['precision']:.2f}%")
+            print(f"Final Recall:     {final_metrics['recall']:.2f}%")
+            print(f"Results saved to: {output_dir}\n{'='*70}\n")
+            
+            if args.enable_swanlab:
+                import swanlab
+                swanlab.finish()
+    finally:
+        cleanup_ddp()
 
 
 if __name__ == "__main__":
