@@ -2,6 +2,7 @@
 swanlog/
 segmentation_results/
 .qoder/
+outputs/
 
 # Python 缓存
 __pycache__/
