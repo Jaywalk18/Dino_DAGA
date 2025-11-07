@@ -22,15 +22,15 @@ setup_environment() {
 # Common Configuration
 # ============================================================================
 # Model settings
-MODEL_NAME="${MODEL_NAME:-dinov3_vits16}"
-PRETRAINED_PATH="${PRETRAINED_PATH:-dinov3_vits16_pretrain_lvd1689m-08c60483.pth}"
+MODEL_NAME="${MODEL_NAME:-dinov3_vitb16}"
+PRETRAINED_PATH="${PRETRAINED_PATH:-dinov3_vitb16_pretrain_lvd1689m.pth}"
 
 # Path settings
 PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
 CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 
 # GPU Configuration
-DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-3,4,5,6}"  # Default: 4 RTX 3090 GPUs
+DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-3,4,5,6}"  
 GPU_IDS="${GPU_IDS:-$DEFAULT_GPU_IDS}"
 
 # Training settings
@@ -84,10 +84,23 @@ run_experiment() {
     
     echo -e "\n▶️  ${description}"
     
-    # Build sample_args if SAMPLE_RATIO is set
+    # Build sample_args based on script type
     local sample_args=()
     if [[ -n "$SAMPLE_RATIO" ]]; then
-        sample_args+=(--sample_ratio "$SAMPLE_RATIO")
+        # main_classification.py uses --subset_ratio, others use --sample_ratio
+        if [[ "$main_script" == *"classification"* ]]; then
+            sample_args+=(--subset_ratio "$SAMPLE_RATIO")
+        else
+            sample_args+=(--sample_ratio "$SAMPLE_RATIO")
+        fi
+    fi
+    
+    # Build visualization args based on task type
+    local vis_args=()
+    if [[ "$main_script" == *"classification"* ]]; then
+        vis_args+=(--vis_indices 1000 2000 3000 4000)
+    elif [[ "$main_script" == *"detection"* ]] || [[ "$main_script" == *"segmentation"* ]]; then
+        vis_args+=(--num_vis_samples 4)
     fi
     
     # Build task-specific args
@@ -116,9 +129,9 @@ run_experiment() {
         --lr "$LR" \
         --output_dir "$output_subdir" \
         --enable_visualization \
-        --num_vis_samples 4 \
         --log_freq "${LOG_FREQ:-5}" \
         "${sample_args[@]}" \
+        "${vis_args[@]}" \
         "${task_args[@]}" \
         "$@"
     

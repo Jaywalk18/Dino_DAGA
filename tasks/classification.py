@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import swanlab
 
 from core.daga import DAGA
-from core.heads import ClassificationHead
 from core.backbones import get_attention_map, compute_daga_guidance_map, process_attention_weights
 from core.utils import get_base_model
 
@@ -48,7 +47,11 @@ class ClassificationModel(nn.Module):
                 {str(i): DAGA(feature_dim=self.feature_dim) for i in daga_layers}
             )
         
-        self.classifier = ClassificationHead(self.feature_dim, num_classes)
+        # Use simple linear layer like raw_code (not ClassificationHead)
+        self.classifier = nn.Linear(self.feature_dim, num_classes)
+        # Ensure classifier parameters are trainable
+        for param in self.classifier.parameters():
+            param.requires_grad = True
         
         if self.use_daga:
             for param in self.daga_modules.parameters():
@@ -83,12 +86,17 @@ class ClassificationModel(nn.Module):
         for idx, block in enumerate(self.vit.blocks):
             rope_sincos = self.vit.rope_embed(H=H, W=W) if self.vit.rope_embed else None
             
+            # Extract attention BEFORE block forward (like raw_code)
+            # This captures how the current features (potentially DAGA-adapted from previous layers) 
+            # affect this block's attention
             if request_visualization_maps and idx == self.vis_attn_layer:
                 with torch.no_grad():
                     adapted_attn_weights = get_attention_map(block, x_processed)
             
+            # Pass tokens through the block
             x_processed = block(x_processed, rope_sincos)
             
+            # Apply DAGA AFTER block forward (modifies block output)
             if (
                 self.use_daga
                 and idx in self.daga_layers
@@ -101,29 +109,37 @@ class ClassificationModel(nn.Module):
                 patch_start_index = 1 + num_registers
                 patch_tokens = x_processed[:, patch_start_index:, :]
                 
+                # Store original for comparison
+                patch_tokens_before = patch_tokens.clone() if request_visualization_maps and idx == self.vis_attn_layer else None
+                
                 adapted_patch_tokens = self.daga_modules[str(idx)](
                     patch_tokens, daga_guidance_map
                 )
                 
+                # Debug: Print feature change magnitude during visualization
+                if request_visualization_maps and idx == self.vis_attn_layer:
+                    feature_diff = (adapted_patch_tokens - patch_tokens_before).abs().mean().item()
+                    mix_weight = self.daga_modules[str(idx)].mix_weight.item()
+                    print(f"  [Layer {idx}] DAGA feature change: {feature_diff:.6f}, mix_weight: {mix_weight:.6f}")
+                
                 x_processed = torch.cat([cls_token, register_tokens, adapted_patch_tokens], dim=1)
         
         x_normalized = self.vit.norm(x_processed)
-        
-        # Extract features: CLS token + mean of patch tokens (similar to DINOv3 official implementation)
-        cls_token = x_normalized[:, 0]  # (B, C)
-        patch_start_index = 1 + num_registers
-        patch_tokens = x_normalized[:, patch_start_index:, :]  # (B, num_patches, C)
-        patch_mean = patch_tokens.mean(dim=1)  # (B, C)
-        
-        # Concatenate CLS and patch mean
-        features = torch.cat([cls_token, patch_mean], dim=1)  # (B, 2*C)
+        # Use only CLS token for classification (matching raw_code)
+        features = x_normalized[:, 0]  # (B, C)
         logits = self.classifier(features)
         
         return logits, adapted_attn_weights, daga_guidance_map
 
 
-def setup_training_components(model, args):
-    """Setup criterion, optimizer, scheduler"""
+def setup_training_components(model, args, world_size=1):
+    """Setup criterion, optimizer, scheduler
+    
+    Args:
+        model: The model to train
+        args: Training arguments
+        world_size: Number of GPUs in DDP training (default: 1)
+    """
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     
     base_model = model.module if isinstance(model, DataParallel) else model
@@ -138,7 +154,11 @@ def setup_training_components(model, args):
             else:
                 classifier_params.append(param)
     
-    lr_scaled = args.lr * (args.batch_size * torch.cuda.device_count()) / 256.0
+    # Linear learning rate scaling rule: lr ∝ batch_size
+    # Reference batch size is 256, so: lr_scaled = base_lr * (total_batch_size / 256)
+    # In DDP: total_batch_size = per_gpu_batch_size * world_size
+    total_batch_size = args.batch_size * world_size
+    lr_scaled = args.lr * total_batch_size / 256.0
     
     param_groups = [{"params": classifier_params, "lr": lr_scaled, "weight_decay": 0.0}]
     if daga_params:
@@ -224,6 +244,29 @@ def visualize_attention_comparison(
     
     class_names = getattr(test_dataset, "classes", None)
     
+    # Debug: Print DAGA status and mix_weights
+    from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
+    actual_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
+    if hasattr(actual_model, 'use_daga') and actual_model.use_daga:
+        print(f"\n[DEBUG] DAGA Status at epoch {epoch+1}:")
+        print(f"  DAGA layers: {actual_model.daga_layers}")
+        print(f"  Visualization layer: {actual_model.vis_attn_layer}")
+        print(f"  Mix weights:")
+        for layer_idx, daga_module in actual_model.daga_modules.items():
+            print(f"    Layer {layer_idx}: {daga_module.mix_weight.item():.6f}")
+        print(f"\n  NOTE: Attention extraction timing:")
+        print(f"    - At layer L, attention is extracted BEFORE L's forward pass")
+        print(f"    - DAGA is applied AFTER L's forward pass")
+        print(f"    - So L{actual_model.vis_attn_layer} attention shows effects of DAGA from layers < {actual_model.vis_attn_layer}")
+        if actual_model.vis_attn_layer in actual_model.daga_layers:
+            print(f"    - WARNING: Layer {actual_model.vis_attn_layer} has DAGA but applied AFTER attention extraction")
+            earlier_daga_layers = [l for l in actual_model.daga_layers if l < actual_model.vis_attn_layer]
+            if earlier_daga_layers:
+                print(f"    - Visible DAGA effects: layers {earlier_daga_layers}")
+            else:
+                print(f"    - NO earlier DAGA layers! Attention may look similar to baseline.")
+        print()
+    
     # Get actual model from DDP wrapper if needed
     from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
     actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
@@ -232,7 +275,7 @@ def visualize_attention_comparison(
         _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
         
-        logits, adapted_attn_weights, _ = base_model(
+        logits, adapted_attn_weights, daga_guidance_map = base_model(
             fixed_images, request_visualization_maps=True
         )
         
@@ -296,7 +339,10 @@ def visualize_attention_comparison(
             pred_correct = "✓" if actual_label_name == pred_label_name else "✗"
             fig_title = f"Epoch {epoch+1} - Img#{original_image_index} | True: {actual_label_name} | Pred: {pred_label_name} {pred_correct}"
             
-            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            # Create figure with 4 subplots if DAGA guidance map is available
+            is_daga_model = getattr(actual_base_model, "use_daga", False)
+            num_plots = 4 if (is_daga_model and daga_guidance_map is not None) else 3
+            fig, axes = plt.subplots(1, num_plots, figsize=(5*num_plots, 5))
             fig.suptitle(fig_title, fontsize=14, fontweight="bold")
             
             img = images_np[j].transpose(1, 2, 0)
@@ -310,7 +356,6 @@ def visualize_attention_comparison(
             axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
             axes[1].axis("off")
             
-            is_daga_model = getattr(actual_base_model, "use_daga", False)
             adapted_title = (
                 f"Adapted (DAGA) Attn (L{vis_attn_layer})"
                 if is_daga_model
@@ -319,6 +364,13 @@ def visualize_attention_comparison(
             axes[2].imshow(adapted_attn_np[j], cmap="viridis")
             axes[2].set_title(adapted_title)
             axes[2].axis("off")
+            
+            # Add DAGA guidance map if available
+            if is_daga_model and daga_guidance_map is not None:
+                guidance_np = daga_guidance_map[j].cpu().numpy()
+                axes[3].imshow(guidance_np, cmap="hot")
+                axes[3].set_title(f"DAGA Guidance Map (L{actual_base_model.daga_guidance_layer_idx})")
+                axes[3].axis("off")
             
             plt.tight_layout(rect=[0, 0, 1, 0.96])
             vis_figs.append(fig)
@@ -390,24 +442,24 @@ def run_training_loop(
                 "epoch": epoch + 1,
                 "train_loss": train_loss,
                 "train_accuracy": train_acc,
-            "test_accuracy": test_acc,
-            "learning_rate": optimizer.param_groups[0]["lr"],
-            "total_time_minutes": elapsed_time / 60,
-        }
-        
-        if args.enable_visualization and fixed_vis_images is not None and (
-            epoch % args.log_freq == 0 or epoch == args.epochs - 1
-        ):
-            print("📊 Generating attention visualizations...")
-            vis_figs = visualize_attention_comparison(
-                model, fixed_vis_images, args, output_dir, epoch, test_dataset
-            )
-            if vis_figs:
-                log_dict["attention_comparison"] = [
-                    swanlab.Image(fig) for fig in vis_figs
-                ]
-        
-        swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
+                "test_accuracy": test_acc,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "total_time_minutes": elapsed_time / 60,
+            }
+            
+            if args.enable_visualization and fixed_vis_images is not None and (
+                epoch % args.log_freq == 0 or epoch == args.epochs - 1
+            ):
+                print("📊 Generating attention visualizations...")
+                vis_figs = visualize_attention_comparison(
+                    model, fixed_vis_images, args, output_dir, epoch, test_dataset
+                )
+                if vis_figs:
+                    log_dict["attention_comparison"] = [
+                        swanlab.Image(fig) for fig in vis_figs
+                    ]
+            
+            swanlab.log(log_dict, step=epoch + 1) if getattr(args, 'enable_swanlab', True) else None
         
         if test_acc > best_acc:
             best_acc = test_acc

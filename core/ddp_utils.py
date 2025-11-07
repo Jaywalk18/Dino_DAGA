@@ -52,11 +52,17 @@ def cleanup_ddp():
         dist.destroy_process_group()
 
 
-def create_ddp_dataloaders(train_dataset, val_dataset, batch_size, world_size, rank, num_workers=4, collate_fn=None):
+def create_ddp_dataloaders(train_dataset, val_dataset, batch_size, world_size, rank, num_workers=8, collate_fn=None):
     """Create dataloaders with DistributedSampler for DDP
     
-    Note: num_workers=0 for DDP to avoid SIGSEGV errors with multiprocessing.
-    DDP already provides parallelism across GPUs, so single-process loading per GPU is sufficient.
+    Args:
+        train_dataset: Training dataset
+        val_dataset: Validation dataset
+        batch_size: Batch size per GPU
+        world_size: Number of GPUs
+        rank: Current GPU rank
+        num_workers: Number of data loading workers (default: 8, matching raw_code)
+        collate_fn: Optional custom collate function
     """
     train_sampler = DistributedSampler(
         train_dataset,

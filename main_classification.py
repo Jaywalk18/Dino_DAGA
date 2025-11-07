@@ -86,8 +86,8 @@ def parse_arguments():
         "--vis_indices",
         type=int,
         nargs="+",
-        default=[0, 1, 2, 3],
-        help="Image indices for visualization",
+        default=[1000, 2000, 3000, 4000],
+        help="Test set image indices for visualization",
     )
     parser.add_argument(
         "--enable_visualization",
@@ -166,22 +166,24 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # Auto-detect if we need find_unused_parameters (required when using DAGA as some parameters are frozen)
-    has_frozen_params = any(not p.requires_grad for p in model.parameters())
+    # DAGA mode: if DAGA is applied to all layers in each forward pass, no unused parameters
+    # Baseline mode: backbone frozen but all parameters are used in forward pass
+    # In both cases, find_unused_parameters can be False for better performance
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=has_frozen_params,  # True for DAGA, False for baseline
+        find_unused_parameters=False,  # All parameters are used in forward pass
         broadcast_buffers=False,  # Reduce communication overhead
         gradient_as_bucket_view=True  # More efficient gradient handling
     )
     
     if is_main_process:
-        frozen_status = "with frozen params (DAGA)" if has_frozen_params else "all trainable (baseline)"
-        print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({frozen_status})")
+        mode_status = "DAGA mode" if args.use_daga else "Baseline (frozen backbone)"
+        print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({mode_status})")
     
-    criterion, optimizer, scheduler = setup_training_components(model, args)
+    # Pass world_size for proper learning rate scaling in DDP
+    criterion, optimizer, scheduler = setup_training_components(model, args, world_size=world_size)
     
     # Only prepare visualization on main process
     if is_main_process:

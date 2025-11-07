@@ -16,8 +16,8 @@ DATA_PATH="/home/user/zhoutianjian/DataSets/ADE20K_2021_17_01"
 BASE_OUTPUT_DIR="outputs/segmentation"
 
 # Training hyperparameters (optimized for segmentation)
-EPOCHS=2
-BATCH_SIZE=32  # Per-GPU batch size (segmentation needs more memory)
+EPOCHS=20
+BATCH_SIZE=16  # Per-GPU batch size (segmentation needs more memory)
 INPUT_SIZE=518
 LR=1e-3  # Higher LR for segmentation (official uses 1e-3)
 SAMPLE_RATIO=""  # Use 1% of data for quick test (set to empty for full dataset)
@@ -37,9 +37,9 @@ mkdir -p "$BASE_OUTPUT_DIR"
 print_config "Segmentation"
 
 # Run experiments
-run_experiment "main_segmentation.py" "01_baseline" "Baseline (Lightweight Head)"
+# run_experiment "main_segmentation.py" "01_baseline" "Baseline (Lightweight Head)"
 
 run_experiment "main_segmentation.py" "02_daga_last_layer" "DAGA Single Layer (L11)" \
-    --use_daga --daga_layers 11
+    --use_daga --daga_layers 1 2 10 11
 
 echo -e "\n🎉 Segmentation training completed!"

@@ -196,20 +196,20 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # Auto-detect if we need find_unused_parameters (required when using DAGA as some parameters are frozen)
-    has_frozen_params = any(not p.requires_grad for p in model.parameters())
+    # For detection: DAGA layers might not all be in layers_to_use
+    # Need find_unused_parameters=True to handle this
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=has_frozen_params,  # True for DAGA, False for baseline
+        find_unused_parameters=True,  # Required: DAGA layers may not match layers_to_use
         broadcast_buffers=False,  # Reduce communication overhead
         gradient_as_bucket_view=True  # More efficient gradient handling
     )
     
     if is_main_process:
-        frozen_status = "with frozen params (DAGA)" if has_frozen_params else "all trainable (baseline)"
-        print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({frozen_status})")
+        mode_status = "DAGA mode" if args.use_daga else "Baseline (frozen backbone)"
+        print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({mode_status})")
     
     optimizer, scheduler = setup_training_components(model, args)
     
