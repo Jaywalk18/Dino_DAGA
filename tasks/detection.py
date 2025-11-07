@@ -599,8 +599,12 @@ def visualize_detection_results(
     base_model.eval()
     vis_figs = []
     
+    # Get actual model from DDP wrapper if needed
+    from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
+    actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
+    
     with torch.no_grad():
-        _, (H, W) = base_model.vit.prepare_tokens_with_masks(fixed_images)
+        _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
         
         pred_logits, pred_boxes, adapted_attn_weights, _ = base_model(
@@ -613,17 +617,17 @@ def visualize_detection_results(
         if adapted_attn_weights is not None:
             adapted_attn_np = process_attention_weights(adapted_attn_weights, num_patches_expected, H, W)
             
-            x_proc, _ = base_model.vit.prepare_tokens_with_masks(fixed_images)
+            x_proc, _ = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
             baseline_raw_weights = None
-            for i in range(base_model.daga_guidance_layer_idx + 1):
+            for i in range(actual_base_model.daga_guidance_layer_idx + 1):
                 rope_sincos = (
-                    base_model.vit.rope_embed(H=H, W=W)
-                    if base_model.vit.rope_embed
+                    actual_base_model.vit.rope_embed(H=H, W=W)
+                    if actual_base_model.vit.rope_embed
                     else None
                 )
-                if i == base_model.daga_guidance_layer_idx:
-                    baseline_raw_weights = get_attention_map(base_model.vit.blocks[i], x_proc)
-                x_proc = base_model.vit.blocks[i](x_proc, rope_sincos)
+                if i == actual_base_model.daga_guidance_layer_idx:
+                    baseline_raw_weights = get_attention_map(actual_base_model.vit.blocks[i], x_proc)
+                x_proc = actual_base_model.vit.blocks[i](x_proc, rope_sincos)
             
             if baseline_raw_weights is not None:
                 baseline_attn_np = process_attention_weights(baseline_raw_weights, num_patches_expected, H, W)

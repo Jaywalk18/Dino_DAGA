@@ -177,6 +177,7 @@ def main():
     
     train_loader, val_loader = create_ddp_dataloaders(
         train_dataset, val_dataset, args.batch_size, world_size, rank,
+        num_workers=2,  # Reduce workers to avoid shared memory issues
         collate_fn=detection_collate_fn
     )
     
