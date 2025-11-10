@@ -77,6 +77,7 @@ def parse_arguments():
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of data loading workers")
     
     parser.add_argument("--output_dir", default="./outputs", help="Output directory")
     parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
@@ -145,7 +146,8 @@ def main():
         print(f"  Effective batch size: {args.batch_size * world_size}")
     
     train_loader, test_loader = create_ddp_dataloaders(
-        train_dataset, test_dataset, args.batch_size, world_size, rank
+        train_dataset, test_dataset, args.batch_size, world_size, rank,
+        num_workers=args.num_workers
     )
     
     if is_main_process:

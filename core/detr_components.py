@@ -158,13 +158,16 @@ class DETRHead(nn.Module):
                 nn.init.constant_(layer.bias, 0)
         
         # Last layer: Initialize to predict diverse box positions
-        # Bias initialization helps spread boxes across the image
-        nn.init.uniform_(self.bbox_embed.layers[-1].weight, -0.001, 0.001)
-        # Initialize bias to [0.5, 0.5, 0.3, 0.3] (center of image, medium size)
-        nn.init.constant_(self.bbox_embed.layers[-1].bias[0], 0.5)  # cx
-        nn.init.constant_(self.bbox_embed.layers[-1].bias[1], 0.5)  # cy  
-        nn.init.constant_(self.bbox_embed.layers[-1].bias[2], 0.3)  # w
-        nn.init.constant_(self.bbox_embed.layers[-1].bias[3], 0.3)  # h
+        # Use uniform initialization to ensure diversity
+        last_layer = self.bbox_embed.layers[-1]
+        nn.init.uniform_(last_layer.weight, -0.1, 0.1)
+        
+        # Initialize bias to encourage diverse predictions before sigmoid
+        # sigmoid(-2) ≈ 0.12, sigmoid(0) = 0.5, sigmoid(2) ≈ 0.88
+        # We want initial predictions spread across the image
+        with torch.no_grad():
+            last_layer.bias[0:2].uniform_(-1, 1)  # cx, cy: spread across image
+            last_layer.bias[2:4].uniform_(-0.5, 0.5)  # w, h: varied sizes
     
     def forward(self, features):
         """
@@ -198,7 +201,11 @@ class DETRHead(nn.Module):
         
         # Predict class and bbox for each query
         pred_logits = self.class_embed(hs)  # (B, num_queries, num_classes)
-        pred_boxes = self.bbox_embed(hs).sigmoid()  # (B, num_queries, 4)
+        pred_boxes_raw = self.bbox_embed(hs)  # (B, num_queries, 4)
+        
+        # Apply sigmoid to ensure boxes are in [0, 1]
+        # But first add a small offset to avoid all-zero gradients
+        pred_boxes = pred_boxes_raw.sigmoid()  # (B, num_queries, 4)
         
         return pred_logits, pred_boxes
 

@@ -90,6 +90,7 @@ def parse_arguments():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of data loading workers")
     
     parser.add_argument("--output_dir", default="./outputs", help="Output directory")
     parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
@@ -183,7 +184,8 @@ def main():
         print(f"  Effective batch size: {args.batch_size * world_size}")
     
     train_loader, val_loader = create_ddp_dataloaders(
-        train_dataset, val_dataset, args.batch_size, world_size, rank
+        train_dataset, val_dataset, args.batch_size, world_size, rank,
+        num_workers=args.num_workers
     )
     
     if is_main_process:
@@ -203,16 +205,13 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # DAGA mode: if DAGA is applied to all layers in each forward pass, no unused parameters
-    # Baseline mode: backbone frozen but all parameters are used in forward pass
-    # In both cases, find_unused_parameters can be False for better performance
-    # For segmentation: DAGA layers might not all be in out_indices
-    # Need find_unused_parameters=True to handle this
+    # If DAGA layers are configured properly (all affect at least one layer in out_indices),
+    # we don't need find_unused_parameters=True
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=True,  # Required: DAGA layers may not match out_indices
+        find_unused_parameters=False,  # All DAGA layers should affect extracted features
         broadcast_buffers=False,  # Reduce communication overhead
         gradient_as_bucket_view=True  # More efficient gradient handling
     )

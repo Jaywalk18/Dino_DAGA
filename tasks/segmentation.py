@@ -291,6 +291,18 @@ def visualize_segmentation_results(
     from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
     actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
     
+    # Print DAGA status for debugging
+    is_daga = getattr(actual_base_model, "use_daga", False)
+    if is_daga:
+        print(f"\n[DEBUG] Segmentation DAGA Visualization at epoch {epoch+1}:")
+        print(f"  DAGA layers: {actual_base_model.daga_layers}")
+        print(f"  Visualization layer: {actual_base_model.daga_guidance_layer_idx}")
+        print(f"  Mix weights:")
+        for layer_idx, daga_module in actual_base_model.daga_modules.items():
+            weight_val = daga_module.mix_weight.item()
+            print(f"    Layer {layer_idx}: {weight_val:.6f}")
+        print()
+    
     with torch.no_grad():
         _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
@@ -307,6 +319,7 @@ def visualize_segmentation_results(
         if adapted_attn_weights is not None:
             adapted_attn_np = process_attention_weights(adapted_attn_weights, num_patches_expected, H, W)
             
+            # Get baseline attention from frozen backbone (no DAGA applied)
             x_proc, _ = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
             baseline_raw_weights = None
             for i in range(actual_base_model.daga_guidance_layer_idx + 1):
@@ -366,18 +379,50 @@ def visualize_segmentation_results(
             )
             plt.close(fig1)
             
-            # Group 2: Attention Map Comparison (only if DAGA is used)
+            # Group 2: Enhanced Attention Map Comparison (only if DAGA is used)
             if adapted_attn_np is not None and baseline_attn_np is not None:
-                fig2, axes2 = plt.subplots(1, 2, figsize=(10, 5))
-                fig2.suptitle(f"Attention Maps - Epoch {epoch+1} - Sample {j}", fontsize=14, fontweight="bold")
+                fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
+                fig2.suptitle(f"Attention Analysis - Epoch {epoch+1} - Sample {j}", 
+                            fontsize=16, fontweight="bold")
                 
-                axes2[0].imshow(baseline_attn_np[j], cmap="viridis")
-                axes2[0].set_title("Frozen Backbone Attn")
-                axes2[0].axis("off")
+                # Row 1: Original attention maps
+                im0 = axes2[0, 0].imshow(baseline_attn_np[j], cmap="viridis", vmin=0, vmax=1)
+                axes2[0, 0].set_title("Frozen Backbone Attention", fontsize=12)
+                axes2[0, 0].axis("off")
+                plt.colorbar(im0, ax=axes2[0, 0], fraction=0.046, pad=0.04)
                 
-                axes2[1].imshow(adapted_attn_np[j], cmap="viridis")
-                axes2[1].set_title("Adapted Model Attn")
-                axes2[1].axis("off")
+                im1 = axes2[0, 1].imshow(adapted_attn_np[j], cmap="viridis", vmin=0, vmax=1)
+                axes2[0, 1].set_title("DAGA-Adapted Attention", fontsize=12)
+                axes2[0, 1].axis("off")
+                plt.colorbar(im1, ax=axes2[0, 1], fraction=0.046, pad=0.04)
+                
+                # Row 2: Difference map and overlay
+                diff_map = adapted_attn_np[j] - baseline_attn_np[j]
+                abs_diff = np.abs(diff_map)
+                max_diff = np.max(abs_diff)
+                mean_diff = np.mean(abs_diff)
+                
+                im2 = axes2[1, 0].imshow(diff_map, cmap="RdBu_r", vmin=-0.3, vmax=0.3)
+                axes2[1, 0].set_title(f"Difference Map\n(Mean |Δ|={mean_diff:.4f}, Max |Δ|={max_diff:.4f})", 
+                                     fontsize=11)
+                axes2[1, 0].axis("off")
+                plt.colorbar(im2, ax=axes2[1, 0], fraction=0.046, pad=0.04)
+                
+                # Overlay difference on image
+                axes2[1, 1].imshow(img)
+                # Resize attention difference to match image size
+                from scipy.ndimage import zoom
+                if diff_map.shape != img.shape[:2]:
+                    zoom_h = img.shape[0] / diff_map.shape[0]
+                    zoom_w = img.shape[1] / diff_map.shape[1]
+                    diff_resized = zoom(diff_map, (zoom_h, zoom_w), order=1)
+                else:
+                    diff_resized = diff_map
+                
+                im3 = axes2[1, 1].imshow(diff_resized, cmap="RdBu_r", alpha=0.6, vmin=-0.3, vmax=0.3)
+                axes2[1, 1].set_title("Difference Overlay on Image", fontsize=11)
+                axes2[1, 1].axis("off")
+                plt.colorbar(im3, ax=axes2[1, 1], fraction=0.046, pad=0.04)
                 
                 plt.tight_layout()
                 vis_figs.append(fig2)

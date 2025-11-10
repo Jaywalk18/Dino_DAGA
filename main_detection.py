@@ -90,6 +90,7 @@ def parse_arguments():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--num_workers", type=int, default=2, help="Number of data loading workers")
     
     parser.add_argument("--output_dir", default="./outputs", help="Output directory")
     parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
@@ -177,7 +178,7 @@ def main():
     
     train_loader, val_loader = create_ddp_dataloaders(
         train_dataset, val_dataset, args.batch_size, world_size, rank,
-        num_workers=2,  # Reduce workers to avoid shared memory issues
+        num_workers=args.num_workers,
         collate_fn=detection_collate_fn
     )
     
@@ -197,15 +198,15 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # For detection: DAGA layers might not all be in layers_to_use
-    # Need find_unused_parameters=True to handle this
+    # If DAGA layers are configured properly (all affect at least one layer in layers_to_use),
+    # we don't need find_unused_parameters=True
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=True,  # Required: DAGA layers may not match layers_to_use
-        broadcast_buffers=False,  # Reduce communication overhead
-        gradient_as_bucket_view=True  # More efficient gradient handling
+        find_unused_parameters=False,  # All DAGA layers should affect extracted features
+        broadcast_buffers=False,
+        gradient_as_bucket_view=True
     )
     
     if is_main_process:

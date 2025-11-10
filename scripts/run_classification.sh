@@ -17,10 +17,10 @@ BASE_OUTPUT_DIR="outputs/classification"
 
 # Training hyperparameters (matching raw_code for optimal performance)
 EPOCHS=20
-
 BATCH_SIZE=128
 INPUT_SIZE=224
-LR=4e-3      
+LR=4e-3
+NUM_WORKERS=8  # Data loading workers
 SAMPLE_RATIO=""  # Empty = use full dataset
 LOG_FREQ=2
 

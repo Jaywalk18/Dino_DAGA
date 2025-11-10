@@ -20,8 +20,11 @@ def setup_environment(seed):
 
 
 def get_base_model(model):
-    """Get the base model, handling DataParallel wrapper"""
-    return model.module if isinstance(model, DataParallel) else model
+    """Get the base model, handling DataParallel/DDP wrapper"""
+    from torch.nn.parallel import DistributedDataParallel as DDP
+    if isinstance(model, (DataParallel, DDP)):
+        return model.module
+    return model
 
 
 def save_checkpoint(model, optimizer, epoch, best_metric, args, path, vis_data=None):

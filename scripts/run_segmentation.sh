@@ -20,6 +20,7 @@ EPOCHS=20
 BATCH_SIZE=16  # Per-GPU batch size (segmentation needs more memory)
 INPUT_SIZE=518
 LR=1e-3  # Higher LR for segmentation (official uses 1e-3)
+NUM_WORKERS=4  # Moderate workers for segmentation
 SAMPLE_RATIO=""  # Use 1% of data for quick test (set to empty for full dataset)
 OUT_INDICES="3 6 9"  # Multi-layer features for segmentation
 LOG_FREQ=5

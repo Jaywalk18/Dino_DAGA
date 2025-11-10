@@ -185,6 +185,5 @@ def detection_collate_fn(batch):
         boxes_list.append(target['boxes'])
         labels_list.append(target['labels'])
     
-    images = torch.stack(images, dim=0)
-    
+    # Return list of images for compatibility
     return images, boxes_list, labels_list

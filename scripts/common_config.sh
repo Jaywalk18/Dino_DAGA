@@ -30,11 +30,12 @@ PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
 CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
 
 # GPU Configuration
-DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-3,4,5,6}"  
+DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-2,3,4,5,6}"  
 GPU_IDS="${GPU_IDS:-$DEFAULT_GPU_IDS}"
 
 # Training settings
 SEED="${SEED:-42}"
+NUM_WORKERS="${NUM_WORKERS:-8}"  # Number of data loading workers (default: 8)
 
 # ============================================================================
 # Helper Functions
@@ -129,6 +130,7 @@ run_experiment() {
         --lr "$LR" \
         --output_dir "$output_subdir" \
         --enable_visualization \
+        --num_workers "$NUM_WORKERS" \
         --log_freq "${LOG_FREQ:-5}" \
         "${sample_args[@]}" \
         "${vis_args[@]}" \
