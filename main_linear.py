@@ -158,10 +158,12 @@ def main():
     val_dataset_str = val_dataset_mapping[args.dataset]
     
     # Create Linear evaluation config following official structure
+    # ModelConfig expects config_file and pretrained_weights
+    # We use model_name as a placeholder for config_file since we load directly
     linear_config = LinearEvalConfig(
         model=ModelConfig(
-            model_name=args.model_name,
-            weights=args.pretrained_path,
+            config_file=args.model_name,  # Use model_name as identifier
+            pretrained_weights=args.pretrained_path,
         ),
         train=TrainConfig(
             dataset=train_dataset_str,

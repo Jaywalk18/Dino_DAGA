@@ -20,6 +20,10 @@ SAMPLE_RATIO=""  # Empty = use full dataset
 KNN_K_VALUES="10 20 50 100"
 TEMPERATURE=0.07
 
+# Set dummy values for print_config (KNN uses different params)
+EPOCHS="N/A"
+LR="N/A"
+
 # Override default GPU if needed
 # DEFAULT_GPU_IDS="1,2,3,4,5,6"  # Uncomment to override default
 

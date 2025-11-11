@@ -198,13 +198,14 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # If DAGA layers are configured properly (all affect at least one layer in layers_to_use),
-    # we don't need find_unused_parameters=True
+    # Detection task uses complex head with multiple branches (cls, box, centerness)
+    # which may cause gradient tracking issues in DDP. Use find_unused_parameters=True
+    # to handle this robustly, with minimal performance impact.
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=False,  # All DAGA layers should affect extracted features
+        find_unused_parameters=True,  # Required for multi-branch detection head
         broadcast_buffers=False,
         gradient_as_bucket_view=True
     )

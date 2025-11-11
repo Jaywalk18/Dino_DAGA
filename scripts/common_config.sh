@@ -113,6 +113,15 @@ run_experiment() {
         task_args+=(--out_indices $OUT_INDICES)
     fi
     
+    # Build training-specific args (not needed for linear/knn/logreg)
+    local training_args=()
+    if [[ "$main_script" != *"linear"* ]] && [[ "$main_script" != *"knn"* ]] && [[ "$main_script" != *"logreg"* ]]; then
+        training_args+=(--epochs "$EPOCHS")
+        training_args+=(--lr "$LR")
+        training_args+=(--enable_visualization)
+        training_args+=(--log_freq "${LOG_FREQ:-5}")
+    fi
+    
     # Use torchrun for DDP training
     CUDA_VISIBLE_DEVICES=$GPU_IDS torchrun \
         --standalone \
@@ -124,14 +133,11 @@ run_experiment() {
         --data_path "$DATA_PATH" \
         --model_name "$MODEL_NAME" \
         --pretrained_path "${CHECKPOINT_DIR}/${PRETRAINED_PATH}" \
-        --epochs "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
         --input_size "$INPUT_SIZE" \
-        --lr "$LR" \
         --output_dir "$output_subdir" \
-        --enable_visualization \
         --num_workers "$NUM_WORKERS" \
-        --log_freq "${LOG_FREQ:-5}" \
+        "${training_args[@]}" \
         "${sample_args[@]}" \
         "${vis_args[@]}" \
         "${task_args[@]}" \

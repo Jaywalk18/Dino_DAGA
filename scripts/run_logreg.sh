@@ -20,6 +20,10 @@ SAMPLE_RATIO=""  # Empty = use full dataset
 MAX_ITER=1000
 TOLERANCE=1e-12
 
+# Set dummy values for print_config (LogReg uses different params)
+EPOCHS="N/A"
+LR="N/A"
+
 # Override default GPU if needed
 # DEFAULT_GPU_IDS="1,2,3,4,5,6"  # Uncomment to override default
 

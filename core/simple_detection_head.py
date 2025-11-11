@@ -183,9 +183,11 @@ def simple_detection_loss(cls_logits, box_preds, centerness,
         avg_box_loss = total_box_loss / B * 2.0  # Weight box loss more
         avg_ctr_loss = total_ctr_loss / B
     else:
-        avg_cls_loss = cls_logits.sum() * 0.0
-        avg_box_loss = box_preds.sum() * 0.0
-        avg_ctr_loss = centerness.sum() * 0.0
+        # Ensure gradient flow even when no positive samples
+        # Use a small dummy loss to touch all parameters
+        avg_cls_loss = (cls_logits.sum() + box_preds.sum() + centerness.sum()) * 0.0
+        avg_box_loss = torch.tensor(0.0, device=cls_logits.device, requires_grad=True)
+        avg_ctr_loss = torch.tensor(0.0, device=cls_logits.device, requires_grad=True)
     
     total_loss = avg_cls_loss + avg_box_loss + avg_ctr_loss
     

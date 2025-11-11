@@ -287,11 +287,19 @@ def main():
     model.to(device)
     
     # Wrap with DDP
+    # Determine if we need find_unused_parameters based on DAGA configuration
+    need_find_unused = False
+    if args.use_daga and args.daga_layers:
+        max_out_idx = max(args.out_indices)
+        # If all DAGA layers are after the last output index, they won't affect output
+        if all(daga_idx > max_out_idx for daga_idx in args.daga_layers):
+            need_find_unused = True
+    
     model = nn.parallel.DistributedDataParallel(
         model,
         device_ids=[local_rank],
         output_device=local_rank,
-        find_unused_parameters=False,
+        find_unused_parameters=need_find_unused,
     )
     
     if is_main_process:

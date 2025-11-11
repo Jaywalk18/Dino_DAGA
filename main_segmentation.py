@@ -205,13 +205,20 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # If DAGA layers are configured properly (all affect at least one layer in out_indices),
-    # we don't need find_unused_parameters=True
+    # Determine if we need find_unused_parameters based on DAGA configuration
+    # Only need it if DAGA layers are ALL after the last out_index (very rare)
+    need_find_unused = False
+    if args.use_daga and args.daga_layers:
+        max_out_idx = max(args.out_indices)
+        # If all DAGA layers are after the last output index, they won't affect output
+        if all(daga_idx > max_out_idx for daga_idx in args.daga_layers):
+            need_find_unused = True
+    
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=False,  # All DAGA layers should affect extracted features
+        find_unused_parameters=need_find_unused,
         broadcast_buffers=False,  # Reduce communication overhead
         gradient_as_bucket_view=True  # More efficient gradient handling
     )

@@ -302,7 +302,10 @@ class DetectionModel(nn.Module):
             request_visualization_maps: whether to return attention/guidance maps
             
         Returns:
-            cls_logits, box_preds, centerness, attn, guidance
+            If request_visualization_maps=True: 
+                cls_logits, box_preds, centerness, attn, guidance
+            If request_visualization_maps=False:
+                cls_logits, box_preds, centerness
         """
         # Handle both list and tensor inputs
         if isinstance(x, list):
@@ -323,11 +326,13 @@ class DetectionModel(nn.Module):
         # Detection head
         cls_logits, box_preds, centerness = self.detection_head(features_concat)
         
-        # Get visualization if requested
-        attn = self.vit_wrapper._cached_attn if request_visualization_maps else None
-        guidance = self.vit_wrapper._cached_guidance if self.use_daga else None
-        
-        return cls_logits, box_preds, centerness, attn, guidance
+        # Return with or without visualization maps based on request
+        if request_visualization_maps:
+            attn = self.vit_wrapper._cached_attn
+            guidance = self.vit_wrapper._cached_guidance if self.use_daga else None
+            return cls_logits, box_preds, centerness, attn, guidance
+        else:
+            return cls_logits, box_preds, centerness
 
 
 def setup_training_components(model, args):
@@ -427,7 +432,7 @@ def train_epoch(model, dataloader, optimizer, device, epoch, num_classes):
         _, H, W = images[0].shape
         
         optimizer.zero_grad()
-        cls_logits, box_preds, centerness, _, _ = model(images, False)
+        cls_logits, box_preds, centerness = model(images, False)
         
         loss_dict = simple_detection_loss(
             cls_logits, box_preds, centerness,
@@ -576,7 +581,7 @@ def evaluate(model, dataloader, device, num_classes):
             
             _, H, W = images[0].shape
             
-            cls_logits, box_preds, centerness, _, _ = model(images, False)
+            cls_logits, box_preds, centerness = model(images, False)
             loss_dict = simple_detection_loss(
                 cls_logits, box_preds, centerness,
                 boxes_list, labels_list,
