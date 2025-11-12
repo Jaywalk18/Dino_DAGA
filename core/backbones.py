@@ -10,12 +10,54 @@ def load_dinov3_backbone(model_name, pretrained_path, dinov3_repo_path=None):
     if dinov3_repo_path is None:
         dinov3_repo_path = '/home/user/zhoutianjian/dinov3'
     
-    weights_path = os.path.join('/home/user/zhoutianjian/DAGA/checkpoints', pretrained_path)
+    # Handle absolute vs relative paths
+    if os.path.isabs(pretrained_path):
+        weights_path = pretrained_path
+    else:
+        weights_path = os.path.join('/home/user/zhoutianjian/DAGA/checkpoints', pretrained_path)
     
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Checkpoint not found: {weights_path}")
     
     import torch.distributed as dist
+    
+    # Check if this is a training checkpoint (contains model_state_dict) or a plain state_dict
+    # Only rank 0 extracts to avoid file conflicts
+    actual_weights_path = weights_path + '.extracted'
+    if not os.path.exists(actual_weights_path):
+        if not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0:
+            checkpoint = torch.load(weights_path, map_location='cpu', weights_only=False)
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                # This is a training checkpoint, extract and clean the model weights
+                state_dict = checkpoint['model_state_dict']
+                # Remove 'module.' and 'vit.' prefixes (from DDP and classification wrapper)
+                cleaned_state_dict = {}
+                for key, value in state_dict.items():
+                    new_key = key
+                    # Remove 'module.' prefix (from DDP)
+                    if new_key.startswith('module.'):
+                        new_key = new_key[7:]
+                    # Remove 'vit.' prefix (from classification wrapper)
+                    if new_key.startswith('vit.'):
+                        new_key = new_key[4:]
+                    
+                    # Skip classifier and daga_modules layers (only keep backbone)
+                    if new_key.startswith('classifier.') or new_key.startswith('daga_modules.'):
+                        continue
+                    
+                    cleaned_state_dict[new_key] = value
+                torch.save(cleaned_state_dict, actual_weights_path, _use_new_zipfile_serialization=True)
+                del checkpoint, state_dict, cleaned_state_dict  # Free memory
+            else:
+                # Plain state_dict, use original path
+                actual_weights_path = weights_path
+        # Wait for rank 0 to finish extraction
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+    
+    # Use extracted weights if they exist, otherwise use original
+    if os.path.exists(actual_weights_path) and actual_weights_path != weights_path:
+        weights_path = actual_weights_path
     
     # Only print from rank 0 or if not in distributed mode
     should_print = not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0

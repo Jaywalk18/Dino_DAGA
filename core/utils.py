@@ -43,13 +43,19 @@ def save_checkpoint(model, optimizer, epoch, best_metric, args, path, vis_data=N
 
 def setup_logging(args, task_name="classification"):
     """Setup SwanLab logging"""
+    import os
     method_name = "daga" if args.use_daga else "baseline"
     exp_name = (
         args.swanlab_name
         or f"{args.dataset}_{method_name}_L{'-'.join(map(str, args.daga_layers)) if args.use_daga else ''}_{date.today()}"
     )
     
-    enable_swanlab = getattr(args, 'enable_swanlab', True)
+    # Check both environment variable and args attribute
+    swanlab_mode = os.environ.get('SWANLAB_MODE', '').lower()
+    enable_swanlab = getattr(args, 'enable_swanlab', True) and swanlab_mode != 'disabled'
+    
+    # Store enable_swanlab in args for later use
+    args.enable_swanlab = enable_swanlab
     
     if enable_swanlab:
         swanlab.init(

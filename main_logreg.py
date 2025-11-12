@@ -29,11 +29,41 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 
 class FeatureExtractorModel(nn.Module):
     """Wrapper that extracts features from DINOv3 with optional DAGA"""
-    def __init__(self, vit_model, use_daga=False, daga_layers=None):
+    def __init__(self, vit_model, use_daga=False, daga_layers=None, daga_weights_path=None):
         super().__init__()
         self.vit_model = vit_model
         self.use_daga = use_daga
         self.daga_layers = daga_layers if daga_layers else []
+        self.feature_dim = vit_model.embed_dim
+        
+        # Initialize DAGA modules if needed
+        if self.use_daga:
+            from core.daga import DAGA
+            self.daga_modules = nn.ModuleDict({
+                str(i): DAGA(feature_dim=self.feature_dim) for i in daga_layers
+            })
+            
+            # Load DAGA weights if provided
+            if daga_weights_path and os.path.exists(daga_weights_path):
+                checkpoint = torch.load(daga_weights_path, map_location='cpu', weights_only=False)
+                if 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                    # Extract DAGA module weights
+                    daga_state_dict = {}
+                    for key, value in state_dict.items():
+                        clean_key = key
+                        if clean_key.startswith('module.'):
+                            clean_key = clean_key[7:]
+                        
+                        if 'daga_modules.' in clean_key:
+                            daga_key = clean_key.split('daga_modules.')[-1]
+                            daga_state_dict[daga_key] = value
+                    
+                    if daga_state_dict:
+                        missing_keys, unexpected_keys = self.daga_modules.load_state_dict(daga_state_dict, strict=False)
+                        print(f"✓ Loaded {len(daga_state_dict)} DAGA weights from {os.path.basename(daga_weights_path)}")
+                    else:
+                        print(f"⚠ No DAGA weights found in checkpoint")
         
         # Freeze backbone
         for param in self.vit_model.parameters():
@@ -44,10 +74,7 @@ class FeatureExtractorModel(nn.Module):
         with torch.no_grad():
             # Get patch embeddings
             B = x.shape[0]
-            x_processed = self.vit_model.prepare_tokens_with_masks(x)
-            
-            # Get dimensions
-            H = W = int((x_processed.shape[1] - 1 - getattr(self.vit_model, 'n_storage_tokens', 0)) ** 0.5)
+            x_processed, (H, W) = self.vit_model.prepare_tokens_with_masks(x)
             
             # Forward through blocks with optional DAGA
             for i, block in enumerate(self.vit_model.blocks):
@@ -128,7 +155,10 @@ def main():
         print(f"Loading DINOv3 model '{args.model_name}'...")
     
     vit_model = load_dinov3_backbone(args.model_name, args.pretrained_path)
-    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers)
+    
+    # For DAGA models, use the same checkpoint to load DAGA weights
+    daga_weights_path = args.pretrained_path if args.use_daga else None
+    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers, daga_weights_path)
     model.to(device)
     model.eval()
     
@@ -154,8 +184,8 @@ def main():
     # Create LogReg evaluation config following official structure
     logreg_config = LogregEvalConfig(
         model=ModelConfig(
-            model_name=args.model_name,
-            weights=args.pretrained_path,
+            config_file="dummy",  # Not used, model is passed separately
+            pretrained_weights=args.pretrained_path,
         ),
         train=TrainConfig(
             dataset=train_dataset_str,
@@ -182,14 +212,26 @@ def main():
         print(f"Test dataset: {test_dataset_str}")
         print(f"Max iterations: {args.max_iter}")
         print(f"Tolerance: {args.tolerance}\n")
+        print("⏳ Extracting features from train and validation datasets...")
+        print("   This may take a few minutes depending on dataset size...")
+    
+    # Synchronize all processes before starting
+    if dist.is_initialized():
+        dist.barrier()
     
     try:
         # Run LogReg evaluation using official method
+        if is_main_process:
+            print("\n🔄 Calling eval_log_regression_with_model...")
+        
         results = eval_log_regression_with_model(
             model=model,
             autocast_dtype=torch.float16,
             config=logreg_config,
         )
+        
+        if is_main_process:
+            print("✓ eval_log_regression_with_model completed!")
         
         if is_main_process:
             print(f"\n{'='*70}")

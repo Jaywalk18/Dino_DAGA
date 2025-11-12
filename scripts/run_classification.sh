@@ -11,8 +11,8 @@ source "${SCRIPT_DIR}/common_config.sh"
 # ============================================================================
 # Task-Specific Configuration
 # ============================================================================
-DATASET="cifar100"
-DATA_PATH="/home/user/zhoutianjian/DataSets/cifar"
+DATASET="imagenet"
+DATA_PATH="/home/user/zhoutianjian/DataSets/imagenet"
 BASE_OUTPUT_DIR="outputs/classification"
 
 # Training hyperparameters (matching raw_code for optimal performance)

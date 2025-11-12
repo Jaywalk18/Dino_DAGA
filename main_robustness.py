@@ -60,6 +60,9 @@ class RobustnessModel(nn.Module):
         with torch.no_grad():
             # Get patch embeddings
             x_processed = self.vit_model.prepare_tokens_with_masks(x)
+            # Handle tuple return value
+            if isinstance(x_processed, tuple):
+                x_processed = x_processed[0]
             
             # Get dimensions
             H = W = int((x_processed.shape[1] - 1 - getattr(self.vit_model, 'n_storage_tokens', 0)) ** 0.5)
@@ -112,13 +115,84 @@ def parse_arguments():
     # Output arguments
     parser.add_argument("--output_dir", default="./outputs/robustness", help="Output directory")
     
+    # Logging arguments
+    parser.add_argument("--swanlab_name", type=str, default=None, help="SwanLab experiment name")
+    parser.add_argument("--swanlab_mode", type=str, default="disabled", help="SwanLab mode")
+    
     return parser.parse_args()
+
+
+class ImageNetCDataset(torch.utils.data.Dataset):
+    """
+    ImageNet-C dataset for robustness evaluation
+    Expected structure: data_root/{corruption_type}/{severity}/images
+    """
+    def __init__(self, data_root, corruption_type, severity, transform=None):
+        self.data_root = Path(data_root)
+        self.corruption_type = corruption_type
+        self.severity = severity
+        self.transform = transform
+        
+        # Build path: data_root/corruption_type/severity/
+        self.corruption_dir = self.data_root / corruption_type / str(severity)
+        
+        if not self.corruption_dir.exists():
+            raise FileNotFoundError(
+                f"Corruption directory not found: {self.corruption_dir}\n"
+                f"Please ensure ImageNet-C data is extracted to {self.data_root}"
+            )
+        
+        # Collect all images (support both nested class dirs and flat structure)
+        self.samples = []
+        self.labels = []
+        
+        # Try nested structure first (class folders)
+        class_dirs = sorted([d for d in self.corruption_dir.iterdir() if d.is_dir()])
+        
+        if class_dirs:
+            # Nested structure: corruption_type/severity/class_name/images
+            for class_idx, class_dir in enumerate(class_dirs):
+                image_files = sorted(list(class_dir.glob("*.JPEG")) + list(class_dir.glob("*.png")))
+                for img_path in image_files:
+                    self.samples.append(img_path)
+                    self.labels.append(class_idx)
+        else:
+            # Flat structure: corruption_type/severity/images
+            image_files = sorted(
+                list(self.corruption_dir.glob("*.JPEG")) + 
+                list(self.corruption_dir.glob("*.png")) +
+                list(self.corruption_dir.glob("*.jpg"))
+            )
+            for idx, img_path in enumerate(image_files):
+                self.samples.append(img_path)
+                # Extract label from filename if possible, otherwise use sequential
+                self.labels.append(idx % 1000)
+        
+        if len(self.samples) == 0:
+            raise RuntimeError(f"No images found in {self.corruption_dir}")
+        
+        print(f"  Loaded {len(self.samples)} images from {corruption_type}/severity_{severity}")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        img_path = self.samples[idx]
+        label = self.labels[idx]
+        
+        # Load image
+        from PIL import Image
+        image = Image.open(img_path).convert('RGB')
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        return image, label
 
 
 class DummyImageNetCDataset(torch.utils.data.Dataset):
     """
-    Dummy ImageNet-C dataset for demonstration
-    Replace with actual ImageNet-C loading in practice
+    Dummy ImageNet-C dataset for testing without real data
     """
     def __init__(self, corruption_type, severity, num_samples=1000, input_size=224):
         self.corruption_type = corruption_type
@@ -233,8 +307,21 @@ def main():
     if is_main_process:
         print(f"✓ Model loaded and ready\n")
     
+    # Prepare transforms for ImageNet-C
+    from torchvision import transforms
+    test_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(args.input_size),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
     # Results storage
     results = defaultdict(dict)  # corruption_type -> severity -> accuracy
+    
+    # Check if real data exists
+    data_root = Path(args.data_path)
+    use_real_data = True
     
     # Evaluate on each corruption and severity
     for corruption_type in args.corruption_types:
@@ -243,14 +330,25 @@ def main():
         
         for severity in args.severity_levels:
             if is_main_process:
-                print(f"  Severity {severity}...", end=" ")
+                print(f"  Severity {severity}...", end=" ", flush=True)
             
-            # Create dataset (replace with actual ImageNet-C loading)
-            dataset = DummyImageNetCDataset(
-                corruption_type, severity,
-                num_samples=1000,  # Use 1000 samples per corruption
-                input_size=args.input_size
-            )
+            # Try to load real data, fall back to dummy data if not available
+            try:
+                if use_real_data:
+                    dataset = ImageNetCDataset(
+                        data_root, corruption_type, severity,
+                        transform=test_transform
+                    )
+            except (FileNotFoundError, RuntimeError) as e:
+                if is_main_process:
+                    print(f"\n  Warning: {str(e)}")
+                    print(f"  Falling back to dummy data for testing...")
+                use_real_data = False
+                dataset = DummyImageNetCDataset(
+                    corruption_type, severity,
+                    num_samples=1000,
+                    input_size=args.input_size
+                )
             
             # Create dataloader
             sampler = torch.utils.data.distributed.DistributedSampler(

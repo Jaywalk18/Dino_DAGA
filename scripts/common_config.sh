@@ -8,7 +8,7 @@
 setup_environment() {
     # Activate conda environment
     source activate dinov3_env
-    # export SWANLAB_MODE=disabled
+    export SWANLAB_MODE=disabled
     
     # DDP Environment Variables for better multi-GPU performance
     export NCCL_DEBUG=INFO
@@ -88,8 +88,8 @@ run_experiment() {
     # Build sample_args based on script type
     local sample_args=()
     if [[ -n "$SAMPLE_RATIO" ]]; then
-        # main_classification.py uses --subset_ratio, others use --sample_ratio
-        if [[ "$main_script" == *"classification"* ]]; then
+        # main_classification.py, main_knn.py, main_linear.py, main_logreg.py use --subset_ratio, others use --sample_ratio
+        if [[ "$main_script" == *"classification"* ]] || [[ "$main_script" == *"knn"* ]] || [[ "$main_script" == *"linear"* ]] || [[ "$main_script" == *"logreg"* ]]; then
             sample_args+=(--subset_ratio "$SAMPLE_RATIO")
         else
             sample_args+=(--sample_ratio "$SAMPLE_RATIO")
@@ -100,8 +100,9 @@ run_experiment() {
     local vis_args=()
     if [[ "$main_script" == *"classification"* ]]; then
         vis_args+=(--vis_indices 1000 2000 3000 4000)
-    elif [[ "$main_script" == *"detection"* ]] || [[ "$main_script" == *"segmentation"* ]]; then
-        vis_args+=(--num_vis_samples 4)
+    elif [[ "$main_script" == *"detection"* ]] || [[ "$main_script" == *"segmentation"* ]] || [[ "$main_script" == *"depth"* ]]; then
+        # Use NUM_VIS_SAMPLES variable if set, otherwise default to 4
+        vis_args+=(--num_vis_samples "${NUM_VIS_SAMPLES:-4}")
     fi
     
     # Build task-specific args
@@ -113,13 +114,23 @@ run_experiment() {
         task_args+=(--out_indices $OUT_INDICES)
     fi
     
-    # Build training-specific args (not needed for linear/knn/logreg)
+    # Build training-specific args (not needed for linear/knn/logreg/robustness)
     local training_args=()
-    if [[ "$main_script" != *"linear"* ]] && [[ "$main_script" != *"knn"* ]] && [[ "$main_script" != *"logreg"* ]]; then
+    if [[ "$main_script" != *"linear"* ]] && [[ "$main_script" != *"knn"* ]] && [[ "$main_script" != *"logreg"* ]] && [[ "$main_script" != *"robustness"* ]]; then
         training_args+=(--epochs "$EPOCHS")
         training_args+=(--lr "$LR")
         training_args+=(--enable_visualization)
         training_args+=(--log_freq "${LOG_FREQ:-5}")
+    fi
+    
+    # Handle absolute vs relative pretrained paths
+    local pretrained_arg
+    if [[ "$PRETRAINED_PATH" == /* ]]; then
+        # Absolute path - use as is
+        pretrained_arg="$PRETRAINED_PATH"
+    else
+        # Relative path - prepend CHECKPOINT_DIR
+        pretrained_arg="${CHECKPOINT_DIR}/${PRETRAINED_PATH}"
     fi
     
     # Use torchrun for DDP training
@@ -132,7 +143,7 @@ run_experiment() {
         --dataset "$DATASET" \
         --data_path "$DATA_PATH" \
         --model_name "$MODEL_NAME" \
-        --pretrained_path "${CHECKPOINT_DIR}/${PRETRAINED_PATH}" \
+        --pretrained_path "$pretrained_arg" \
         --batch_size "$BATCH_SIZE" \
         --input_size "$INPUT_SIZE" \
         --output_dir "$output_subdir" \

@@ -12,10 +12,11 @@ import os
 import sys
 from functools import partial
 
-from core.backbones import load_dinov3_backbone
+from core.backbones import load_dinov3_backbone, compute_daga_guidance_map
 from core.utils import setup_environment
 from core.ddp_utils import setup_ddp, cleanup_ddp
 from data.classification_datasets import get_classification_dataset
+from core.daga import DAGA
 
 # Add dinov3 to path
 dinov3_path = '/home/user/zhoutianjian/Dino_DAGA/dinov3'
@@ -32,42 +33,103 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 
 class FeatureExtractorModel(nn.Module):
     """Wrapper that extracts features from DINOv3 with optional DAGA"""
-    def __init__(self, vit_model, use_daga=False, daga_layers=None):
+    def __init__(self, vit_model, use_daga=False, daga_layers=None, daga_weights_path=None):
         super().__init__()
         self.vit_model = vit_model
         self.use_daga = use_daga
         self.daga_layers = daga_layers if daga_layers else []
+        self.feature_dim = vit_model.embed_dim
+        self.daga_guidance_layer_idx = len(vit_model.blocks) - 1  # Use last layer for guidance
         
-        # Freeze backbone
-        for param in self.vit_model.parameters():
+        # Initialize DAGA modules if needed
+        if self.use_daga:
+            self.daga_modules = nn.ModuleDict({
+                str(i): DAGA(feature_dim=self.feature_dim) for i in daga_layers
+            })
+            
+            # Load DAGA weights if provided
+            if daga_weights_path and os.path.exists(daga_weights_path):
+                checkpoint = torch.load(daga_weights_path, map_location='cpu', weights_only=False)
+                if 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                    # Extract DAGA module weights, handling various prefix patterns
+                    daga_state_dict = {}
+                    for key, value in state_dict.items():
+                        # Remove common prefixes: 'module.', 'vit.'
+                        clean_key = key
+                        if clean_key.startswith('module.'):
+                            clean_key = clean_key[7:]  # Remove 'module.'
+                        
+                        # Keep only daga_modules weights and remove 'daga_modules.' prefix
+                        if 'daga_modules.' in clean_key:
+                            # Extract the part after 'daga_modules.' (e.g., '1.mix_weight')
+                            daga_key = clean_key.split('daga_modules.')[-1]
+                            daga_state_dict[daga_key] = value
+                    
+                    if daga_state_dict:
+                        missing_keys, unexpected_keys = self.daga_modules.load_state_dict(daga_state_dict, strict=False)
+                        print(f"✓ Loaded {len(daga_state_dict)} DAGA weights from {os.path.basename(daga_weights_path)}")
+                        if missing_keys:
+                            print(f"  Missing keys: {len(missing_keys)}")
+                        if unexpected_keys:
+                            print(f"  Unexpected keys: {len(unexpected_keys)}")
+                    else:
+                        print(f"⚠ No DAGA weights found in checkpoint")
+                else:
+                    print(f"⚠ No model_state_dict in checkpoint")
+        
+        # Freeze all parameters (we're only doing inference)
+        for param in self.parameters():
             param.requires_grad = False
     
     def forward(self, x):
-        """Forward pass to extract features"""
+        """Forward pass to extract features with optional DAGA"""
         with torch.no_grad():
             # Get patch embeddings
             B = x.shape[0]
-            x_processed = self.vit_model.prepare_tokens_with_masks(x)
+            x_processed, (H, W) = self.vit_model.prepare_tokens_with_masks(x)
             
-            # Get dimensions
-            H = W = int((x_processed.shape[1] - 1 - getattr(self.vit_model, 'n_storage_tokens', 0)) ** 0.5)
+            B, seq_len, C = x_processed.shape
+            num_patches = H * W
+            num_registers = seq_len - num_patches - 1  # storage tokens
+            
+            # Compute DAGA guidance map if needed
+            daga_guidance_map = None
+            if self.use_daga:
+                daga_guidance_map = compute_daga_guidance_map(
+                    self.vit_model, x_processed, H, W, self.daga_guidance_layer_idx
+                )
             
             # Forward through blocks with optional DAGA
             for i, block in enumerate(self.vit_model.blocks):
                 # Get RoPE embeddings if needed
                 rope_sincos = self.vit_model.rope_embed(H=H, W=W) if self.vit_model.rope_embed else None
                 
-                # Apply DAGA if specified for this layer
-                if self.use_daga and i in self.daga_layers:
-                    # DAGA logic would go here - for now use standard forward
-                    x_processed = block(x_processed, rope_sincos)
-                else:
-                    x_processed = block(x_processed, rope_sincos)
+                # Pass through transformer block
+                x_processed = block(x_processed, rope_sincos)
+                
+                # Apply DAGA AFTER block forward (if specified for this layer)
+                if self.use_daga and i in self.daga_layers and daga_guidance_map is not None:
+                    # Split tokens: [CLS] [STORAGE/REGISTER] [PATCHES]
+                    cls_token = x_processed[:, :1, :]
+                    register_start_index = 1
+                    register_end_index = 1 + num_registers
+                    register_tokens = x_processed[:, register_start_index:register_end_index, :]
+                    patch_start_index = 1 + num_registers
+                    patch_tokens = x_processed[:, patch_start_index:, :]
+                    
+                    # Apply DAGA to patch tokens
+                    adapted_patch_tokens = self.daga_modules[str(i)](
+                        patch_tokens, daga_guidance_map
+                    )
+                    
+                    # Reconstruct sequence
+                    x_processed = torch.cat([cls_token, register_tokens, adapted_patch_tokens], dim=1)
             
             # Apply final norm
             x_processed = self.vit_model.norm(x_processed)
             
-            # Extract CLS token
+            # Extract CLS token for classification
             return x_processed[:, 0]
 
 
@@ -131,7 +193,10 @@ def main():
         print(f"Loading DINOv3 model '{args.model_name}'...")
     
     vit_model = load_dinov3_backbone(args.model_name, args.pretrained_path)
-    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers)
+    
+    # For DAGA models, use the same checkpoint to load DAGA weights
+    daga_weights_path = args.pretrained_path if args.use_daga else None
+    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers, daga_weights_path)
     model.to(device)
     model.eval()
     
@@ -156,10 +221,11 @@ def main():
     test_dataset_str = test_dataset_mapping[args.dataset]
     
     # Create KNN evaluation config following official structure
+    # Note: model field is required but not used by eval_knn_with_model (uses model param instead)
     knn_config = KnnEvalConfig(
         model=ModelConfig(
-            model_name=args.model_name,
-            weights=args.pretrained_path,
+            config_file="dummy",  # Not used, model is passed separately
+            pretrained_weights=args.pretrained_path,
         ),
         train=TrainConfig(
             dataset=train_dataset_str,

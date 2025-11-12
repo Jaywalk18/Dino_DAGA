@@ -29,11 +29,41 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 
 class FeatureExtractorModel(nn.Module):
     """Wrapper that extracts features from DINOv3 with optional DAGA"""
-    def __init__(self, vit_model, use_daga=False, daga_layers=None):
+    def __init__(self, vit_model, use_daga=False, daga_layers=None, daga_weights_path=None):
         super().__init__()
         self.vit_model = vit_model
         self.use_daga = use_daga
         self.daga_layers = daga_layers if daga_layers else []
+        self.feature_dim = vit_model.embed_dim
+        
+        # Initialize DAGA modules if needed
+        if self.use_daga:
+            from core.daga import DAGA
+            self.daga_modules = nn.ModuleDict({
+                str(i): DAGA(feature_dim=self.feature_dim) for i in daga_layers
+            })
+            
+            # Load DAGA weights if provided
+            if daga_weights_path and os.path.exists(daga_weights_path):
+                checkpoint = torch.load(daga_weights_path, map_location='cpu', weights_only=False)
+                if 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                    # Extract DAGA module weights
+                    daga_state_dict = {}
+                    for key, value in state_dict.items():
+                        clean_key = key
+                        if clean_key.startswith('module.'):
+                            clean_key = clean_key[7:]
+                        
+                        if 'daga_modules.' in clean_key:
+                            daga_key = clean_key.split('daga_modules.')[-1]
+                            daga_state_dict[daga_key] = value
+                    
+                    if daga_state_dict:
+                        missing_keys, unexpected_keys = self.daga_modules.load_state_dict(daga_state_dict, strict=False)
+                        print(f"✓ Loaded {len(daga_state_dict)} DAGA weights from {os.path.basename(daga_weights_path)}")
+                    else:
+                        print(f"⚠ No DAGA weights found in checkpoint")
         
         # Freeze backbone
         for param in self.vit_model.parameters():
@@ -44,10 +74,7 @@ class FeatureExtractorModel(nn.Module):
         with torch.no_grad():
             # Get patch embeddings
             B = x.shape[0]
-            x_processed = self.vit_model.prepare_tokens_with_masks(x)
-            
-            # Get dimensions
-            H = W = int((x_processed.shape[1] - 1 - getattr(self.vit_model, 'n_storage_tokens', 0)) ** 0.5)
+            x_processed, (H, W) = self.vit_model.prepare_tokens_with_masks(x)
             
             # Store intermediate outputs
             intermediate_outputs = []
@@ -69,6 +96,18 @@ class FeatureExtractorModel(nn.Module):
             
             # Return intermediate features for linear probing
             return intermediate_outputs
+    
+    def get_intermediate_layers(self, x, n=1, reshape=False, return_class_token=False, 
+                               return_extra_tokens=False, norm=True):
+        """
+        Get intermediate layer outputs from the model.
+        This method delegates to the underlying vit_model but can be extended to support DAGA.
+        """
+        # For now, delegate to the underlying model's get_intermediate_layers
+        return self.vit_model.get_intermediate_layers(
+            x, n=n, reshape=reshape, return_class_token=return_class_token,
+            return_extra_tokens=return_extra_tokens, norm=norm
+        )
 
 
 def parse_arguments():
@@ -134,7 +173,10 @@ def main():
         print(f"Loading DINOv3 model '{args.model_name}'...")
     
     vit_model = load_dinov3_backbone(args.model_name, args.pretrained_path)
-    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers)
+    
+    # For DAGA models, use the same checkpoint to load DAGA weights
+    daga_weights_path = args.pretrained_path if args.use_daga else None
+    model = FeatureExtractorModel(vit_model, args.use_daga, args.daga_layers, daga_weights_path)
     model.to(device)
     model.eval()
     
@@ -205,14 +247,34 @@ def main():
             print(f"\n{'='*70}")
             print("Linear Probe Evaluation Results:")
             print(f"{'='*70}")
+            
+            # Print best classifier
             for k, v in results.items():
-                if isinstance(v, (int, float)):
-                    print(f"  {k}: {v:.2f}%")
-                else:
-                    print(f"  {k}: {v}")
+                if k != "all_classifiers":  # Skip detailed results in summary
+                    if isinstance(v, (int, float)):
+                        print(f"  {k}: {v:.2f}%")
+                    else:
+                        print(f"  {k}: {v}")
+            
+            # Print all classifiers if available
+            if "all_classifiers" in results:
+                print(f"\n{'='*70}")
+                print("All Classifiers Performance:")
+                print(f"{'='*70}")
+                all_classifiers = results["all_classifiers"]
+                # Sort by top-1 accuracy descending
+                sorted_classifiers = sorted(all_classifiers.items(), 
+                                          key=lambda x: x[1]["top-1"], 
+                                          reverse=True)
+                for classifier_name, metrics in sorted_classifiers:
+                    # Extract learning rate from name
+                    lr_str = classifier_name.split("_lr_")[-1].replace("_", ".")
+                    acc = metrics["top-1"] * 100
+                    print(f"  LR={lr_str}: {acc:.2f}%")
+            
             print(f"{'='*70}\n")
             
-            # Save results
+            # Save summary results
             results_file = output_dir / "linear_results.txt"
             with open(results_file, "w") as f:
                 f.write("Linear Probe Evaluation Results\n")
@@ -222,13 +284,31 @@ def main():
                 if args.use_daga:
                     f.write(f"DAGA Layers: {args.daga_layers}\n")
                 f.write("="*50 + "\n\n")
+                
+                # Write best classifier
                 for k, v in results.items():
-                    if isinstance(v, (int, float)):
-                        f.write(f"{k}: {v:.2f}%\n")
-                    else:
-                        f.write(f"{k}: {v}\n")
+                    if k != "all_classifiers":
+                        if isinstance(v, (int, float)):
+                            f.write(f"{k}: {v:.2f}%\n")
+                        else:
+                            f.write(f"{k}: {v}\n")
+                
+                # Write all classifiers performance
+                if "all_classifiers" in results:
+                    f.write("\n" + "="*50 + "\n")
+                    f.write("All Classifiers Performance:\n")
+                    f.write("="*50 + "\n")
+                    all_classifiers = results["all_classifiers"]
+                    sorted_classifiers = sorted(all_classifiers.items(), 
+                                              key=lambda x: x[1]["top-1"], 
+                                              reverse=True)
+                    for classifier_name, metrics in sorted_classifiers:
+                        lr_str = classifier_name.split("_lr_")[-1].replace("_", ".")
+                        acc = metrics["top-1"] * 100
+                        f.write(f"LR={lr_str}: {acc:.2f}%\n")
             
             print(f"✓ Results saved to {results_file}")
+            print(f"✓ Detailed results also in: results_all_classifiers.json")
     
     except Exception as e:
         if is_main_process:
