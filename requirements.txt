@@ -1,0 +1,12 @@
+# DAGA Project Additional Requirements
+# First install DINOv3: cd dinov3 && pip install -e .
+# Then install these: pip install -r requirements.txt
+
+# Progress bars and logging
+tqdm>=4.65.0
+swanlab>=0.7.0
+
+# Visualization
+matplotlib>=3.7.0
+opencv-python>=4.8.0
+
