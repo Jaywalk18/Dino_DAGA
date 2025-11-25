@@ -56,46 +56,41 @@ class NYUDepthV2Dataset(Dataset):
         if not self.mat_file.exists():
             raise FileNotFoundError(f"NYU Depth V2 mat file not found at {self.mat_file}")
         
-        # Load data
-        print(f"Loading NYU Depth V2 dataset from {self.mat_file}...")
-        print(f"This may take a few minutes for the first time...")
+        # Load data using lazy loading (memory-efficient)
+        # Don't open h5py file yet - will open in each worker process
+        print(f"NYU Depth V2 dataset from {self.mat_file}...")
+        print(f"Using on-demand loading for memory efficiency...")
         
+        # Store file path for lazy loading
+        self.h5_file = None
+        self.h5_images = None
+        self.h5_depths = None
+        
+        # Get total samples by opening file temporarily
         with h5py.File(str(self.mat_file), 'r') as f:
-            # Data format in HDF5 file:
-            # Images: (1449, 3, 640, 480) - N samples, each is (3, 640, 480)
-            # Depths: (1449, 640, 480) - N samples, each is (640, 480)
-            images = f['images'][:]  # Shape: (1449, 3, 640, 480)
-            depths = f['depths'][:]   # Shape: (1449, 640, 480)
+            total_samples = f['images'].shape[0]
+            print(f"Dataset shape - Images: {f['images'].shape}, Depths: {f['depths'].shape}")
         
-        print(f"Loaded images shape: {images.shape}")
-        print(f"Loaded depths shape: {depths.shape}")
-        
-        # Convert to (N, H, W, C) format for images and (N, H, W) for depths
-        # Images: (1449, 3, 640, 480) -> (1449, 480, 640, 3)
-        # Depths: (1449, 640, 480) -> (1449, 480, 640)
-        self.images = np.transpose(images, (0, 3, 2, 1))  # (N, H, W, C)
-        self.depths = np.transpose(depths, (0, 2, 1))     # (N, H, W)
-        
-        print(f"Processed images shape: {self.images.shape}")
-        print(f"Processed depths shape: {self.depths.shape}")
+        # Determine sample indices based on split
         
         # Split dataset: first 1000 for train, last 449 for test
         if split == 'train':
-            self.images = self.images[:1000]
-            self.depths = self.depths[:1000]
+            self.start_idx = 0
+            self.end_idx = 1000
         else:  # test
-            self.images = self.images[1000:]
-            self.depths = self.depths[1000:]
+            self.start_idx = 1000
+            self.end_idx = total_samples
         
         # Apply sample ratio if specified
+        num_samples = self.end_idx - self.start_idx
         if sample_ratio is not None and 0.0 < sample_ratio < 1.0:
-            num_samples = int(len(self.images) * sample_ratio)
+            num_samples = int(num_samples * sample_ratio)
             num_samples = max(1, num_samples)  # At least 1 sample
-            self.images = self.images[:num_samples]
-            self.depths = self.depths[:num_samples]
+            self.end_idx = self.start_idx + num_samples
             print(f"Using {sample_ratio*100:.1f}% of {split} data: {num_samples} samples")
         
-        print(f"Split: {split}, Number of samples: {len(self.images)}")
+        self.num_samples = self.end_idx - self.start_idx
+        print(f"Split: {split}, Number of samples: {self.num_samples}")
         
         # Define transforms
         self.to_tensor = transforms.ToTensor()
@@ -115,12 +110,32 @@ class NYUDepthV2Dataset(Dataset):
             self.transform = transforms.Resize((input_size, input_size))
     
     def __len__(self):
-        return len(self.images)
+        return self.num_samples
+    
+    def _ensure_h5_file_open(self):
+        """Open h5py file if not already open (needed for each worker process)"""
+        if self.h5_file is None:
+            self.h5_file = h5py.File(str(self.mat_file), 'r')
+            self.h5_images = self.h5_file['images']
+            self.h5_depths = self.h5_file['depths']
     
     def __getitem__(self, idx):
-        # Get image and depth
-        image = self.images[idx]  # (H, W, C), values in [0, 255]
-        depth = self.depths[idx]  # (H, W), values in meters
+        # Ensure h5py file is open in this worker process
+        self._ensure_h5_file_open()
+        
+        # Load image and depth on-demand from h5py file (memory-efficient)
+        actual_idx = self.start_idx + idx
+        
+        # Load single sample from h5py (only loads what's needed)
+        image = self.h5_images[actual_idx]  # (3, 640, 480)
+        depth = self.h5_depths[actual_idx]   # (640, 480)
+        
+        # Convert to (H, W, C) format for images and (H, W) for depths
+        image = np.transpose(image, (2, 1, 0))  # (3, 640, 480) -> (480, 640, 3)
+        depth = np.transpose(depth, (1, 0))     # (640, 480) -> (480, 640)
+        
+        # image: (H, W, C), values in [0, 255]
+        # depth: (H, W), values in meters
         
         # Convert to PIL Image for transforms
         image = Image.fromarray(image.astype(np.uint8))

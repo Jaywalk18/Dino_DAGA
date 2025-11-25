@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/common_config.sh"
 # ============================================================================
 # DINOtxt requires image-text paired datasets (e.g., COCO Captions, CC3M, etc.)
 DATASET="coco_captions"
-DATA_PATH="/home/user/zhoutianjian/DataSets/COCO_Captions"
+DATA_PATH="/home/user/zhoutianjian/DataSets/COCO 2017"
 BASE_OUTPUT_DIR="outputs/dinotxt"
 
 # DINOtxt hyperparameters

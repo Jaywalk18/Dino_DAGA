@@ -16,13 +16,13 @@ DATA_PATH="/home/user/zhoutianjian/DataSets/imagenet"
 BASE_OUTPUT_DIR="outputs/classification"
 
 # Training hyperparameters (matching raw_code for optimal performance)
-EPOCHS=2
-BATCH_SIZE=128
+EPOCHS=20
+BATCH_SIZE=256
 INPUT_SIZE=224
-LR=2e-2
-NUM_WORKERS=8  # Data loading workers
-SAMPLE_RATIO="0.1"  # Empty = use full dataset
-LOG_FREQ=2
+LR=5e-1
+NUM_WORKERS=16  # Data loading workers
+SAMPLE_RATIO=""  # Empty = use full dataset
+LOG_FREQ=10
 
 # Override default GPU if needed
 # DEFAULT_GPU_IDS="3,4,5,6"  # Uncomment to override default
@@ -37,7 +37,7 @@ mkdir -p "$BASE_OUTPUT_DIR"
 print_config "Classification"
 
 # Run experiments
-# run_experiment "main_classification.py" "01_baseline" "Baseline"
+run_experiment "main_classification.py" "01_baseline" "Baseline"
 
 
 

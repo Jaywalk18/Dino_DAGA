@@ -13,12 +13,12 @@ DATA_PATH="/home/user/zhoutianjian/DataSets/COCO 2017"
 BASE_OUTPUT_DIR="outputs/detection"
 
 # Training hyperparameters
-EPOCHS=1
+EPOCHS=50
 BATCH_SIZE=32
 INPUT_SIZE=518
-LR=2e-4  
-NUM_WORKERS=8  
-SAMPLE_RATIO=0.01
+LR=1e-3  
+NUM_WORKERS=16  
+SAMPLE_RATIO=""
 LAYERS_TO_USE="2 5 8 11"
 LOG_FREQ=5
 
@@ -35,7 +35,7 @@ mkdir -p "$BASE_OUTPUT_DIR"
 print_config "Detection"
 
 # # # Run experiments
-# run_experiment "main_detection.py" "01_baseline" "Baseline (Multi-layer Features)"
+run_experiment "main_detection.py" "01_baseline" "Baseline (Multi-layer Features)"
 
 run_experiment "main_detection.py" "03_daga_detection_four_layers" "DAGA Four Layers (L2 L5 L8 L11)" \
     --use_daga --daga_layers 2 5 8 11

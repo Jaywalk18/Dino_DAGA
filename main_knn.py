@@ -17,6 +17,8 @@ from core.utils import setup_environment
 from core.ddp_utils import setup_ddp, cleanup_ddp
 from data.classification_datasets import get_classification_dataset
 from core.daga import DAGA
+import swanlab
+from datetime import date
 
 # Add dinov3 to path
 dinov3_path = '/home/user/zhoutianjian/Dino_DAGA/dinov3'
@@ -139,7 +141,7 @@ def parse_arguments():
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="dinov3_vitb16", help="DINOv3 model architecture")
-    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m.pth", help="Path to pretrained checkpoint")
+    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth", help="Path to pretrained checkpoint")
     
     # Dataset arguments
     parser.add_argument("--dataset", choices=["cifar10", "cifar100", "imagenet"], default="cifar100", help="Dataset to use")
@@ -181,6 +183,17 @@ def main():
     if is_main_process:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize SwanLab
+        method_name = "daga" if args.use_daga else "baseline"
+        exp_name = f"{args.dataset}_knn_{method_name}_L{'-'.join(map(str, args.daga_layers)) if args.use_daga else ''}_{date.today()}"
+        swanlab.init(
+            workspace="NUDT_SSL__CVPR",
+            project="DINOv3-KNN-Evaluation",
+            experiment_name=exp_name,
+            config=vars(args),
+        )
+        
         print(f"\n{'='*70}")
         print(f"KNN Evaluation with {world_size} GPUs")
         print(f"DAGA: {'Enabled' if args.use_daga else 'Disabled'}")
@@ -208,13 +221,13 @@ def main():
     dataset_mapping = {
         "cifar10": f"CIFAR10:split=TRAIN:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TRAIN:root={args.data_path}",
-        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}",
+        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}:extra={args.data_path}",
     }
     
     test_dataset_mapping = {
         "cifar10": f"CIFAR10:split=TEST:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TEST:root={args.data_path}",
-        "imagenet": f"ImageNet:split=VAL:root={args.data_path}",
+        "imagenet": f"ImageNet:split=VAL:root={args.data_path}:extra={args.data_path}",
     }
     
     train_dataset_str = dataset_mapping[args.dataset]
@@ -254,6 +267,12 @@ def main():
         print(f"Temperature: {args.temperature}\n")
     
     try:
+        # Apply subset ratio if needed
+        if args.subset_ratio < 1.0 and is_main_process:
+            print(f"⚠️  Note: subset_ratio ({args.subset_ratio}) is not supported by dinov3's KNN evaluation.")
+            print(f"   KNN will use the full dataset for accurate k-NN search.")
+            print(f"   To speed up, reduce batch_size or num_workers instead.\n")
+        
         # Run KNN evaluation using official method
         results = eval_knn_with_model(
             model=model,
@@ -265,8 +284,28 @@ def main():
             print(f"\n{'='*70}")
             print("KNN Evaluation Results:")
             print(f"{'='*70}")
-            for k, v in results.items():
-                print(f"  {k}: {v:.2f}%")
+            
+            # Parse and organize results by K value
+            k_results = {}
+            for key, value in results.items():
+                if isinstance(value, dict) and 'top-1' in value:
+                    # Format: {10: {'top-1': 0.85, 'top-5': 0.95}}
+                    k_results[key] = value
+                elif isinstance(value, (int, float)):
+                    # Direct value
+                    print(f"  {key}: {value:.2f}%")
+            
+            # Print K values separately if available
+            if k_results:
+                print(f"\nResults by K value:")
+                for k in sorted(k_results.keys()):
+                    metrics = k_results[k]
+                    top1 = metrics.get('top-1', metrics) * 100 if isinstance(metrics.get('top-1', metrics), float) and metrics.get('top-1', metrics) < 1 else metrics.get('top-1', metrics)
+                    print(f"  K={k}: Top-1 = {top1:.2f}%")
+                    if 'top-5' in metrics:
+                        top5 = metrics['top-5'] * 100 if metrics['top-5'] < 1 else metrics['top-5']
+                        print(f"         Top-5 = {top5:.2f}%")
+            
             print(f"{'='*70}\n")
             
             # Save results
@@ -279,10 +318,33 @@ def main():
                 if args.use_daga:
                     f.write(f"DAGA Layers: {args.daga_layers}\n")
                 f.write("="*50 + "\n\n")
-                for k, v in results.items():
-                    f.write(f"{k}: {v:.2f}%\n")
+                
+                for key, value in results.items():
+                    if isinstance(value, dict):
+                        f.write(f"\nK={key}:\n")
+                        for metric_name, metric_val in value.items():
+                            val = metric_val * 100 if metric_val < 1 else metric_val
+                            f.write(f"  {metric_name}: {val:.2f}%\n")
+                    elif isinstance(value, (int, float)):
+                        f.write(f"{key}: {value:.2f}%\n")
             
             print(f"✓ Results saved to {results_file}")
+            
+            # Log to SwanLab - Include all K values individually
+            log_dict = {}
+            print(f"\n📊 Logging results to SwanLab...")
+            
+            for key, value in results.items():
+                if isinstance(value, dict):
+                    # K value result
+                    for metric_name, metric_val in value.items():
+                        val = metric_val * 100 if metric_val < 1 else metric_val
+                        log_dict[f"knn/K{key}_{metric_name.replace('-', '')}"] = val
+                elif isinstance(value, (int, float)):
+                    log_dict[key] = value
+            
+            swanlab.log(log_dict, step=1)
+            print(f"✓ Results logged to SwanLab (K values: {list(k_results.keys())})")
     
     except Exception as e:
         if is_main_process:
@@ -290,6 +352,8 @@ def main():
             import traceback
             traceback.print_exc()
     finally:
+        if is_main_process:
+            swanlab.finish()
         cleanup_ddp()
 
 

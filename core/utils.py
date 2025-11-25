@@ -58,8 +58,23 @@ def setup_logging(args, task_name="classification"):
     args.enable_swanlab = enable_swanlab
     
     if enable_swanlab:
+        # Define project names for different tasks
+        project_mapping = {
+            "classification": "DINOv3-ImageNet-Classification",
+            "detection": "DINOv3-COCO-Detection", 
+            "segmentation": "DINOv3-ADE20K-Segmentation",
+            "depth": "DINOv3-NYUv2-Depth",
+            "robustness": "DINOv3-ImageNet-C-Robustness",
+            "linear": "DINOv3-Linear-Probing",
+            "logreg": "DINOv3-Logistic-Regression",
+            "knn": "DINOv3-KNN-Evaluation",
+        }
+        
+        project_name = project_mapping.get(task_name, f"DINOv3-{task_name}")
+        
         swanlab.init(
-            project=f"dino-{task_name}_{date.today()}",
+            workspace="NUDT_SSL__CVPR",
+            project=project_name,
             experiment_name=exp_name,
             config=vars(args),
         )

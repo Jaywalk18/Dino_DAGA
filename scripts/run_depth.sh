@@ -16,8 +16,8 @@ BASE_OUTPUT_DIR="outputs/depth"
 BATCH_SIZE=4  
 INPUT_SIZE=518
 NUM_WORKERS=8
-SAMPLE_RATIO=""  # Empty = use full dataset (or "0.1" for testing with 10%)
-EPOCHS=100  
+SAMPLE_RATIO="1"  # Empty = use full dataset (or "0.1" for testing with 10%)
+EPOCHS=2  
 LR=2e-4  
 
 # Visualization and logging
@@ -47,8 +47,8 @@ print_config "Depth Estimation"
 
 # Run experiments
 # Baseline model - no DAGA
-# run_experiment "main_depth.py" "01_baseline" "Baseline (Multi-scale Features)" \
-#     --min_depth $MIN_DEPTH --max_depth $MAX_DEPTH
+run_experiment "main_depth.py" "01_baseline" "Baseline (Multi-scale Features)" \
+    --min_depth $MIN_DEPTH --max_depth $MAX_DEPTH
 
 # DAGA on all feature extraction layers
 run_experiment "main_depth.py" "02_daga_feature_layers" "DAGA Feature Layers (L2,L5,L8,L11)" \

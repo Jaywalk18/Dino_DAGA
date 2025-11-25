@@ -14,6 +14,8 @@ import sys
 from core.backbones import load_dinov3_backbone
 from core.utils import setup_environment
 from core.ddp_utils import setup_ddp, cleanup_ddp
+import swanlab
+from datetime import date
 
 # Add dinov3 to path
 dinov3_path = '/home/user/zhoutianjian/Dino_DAGA/dinov3'
@@ -101,7 +103,7 @@ def parse_arguments():
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="dinov3_vitb16", help="DINOv3 model architecture")
-    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m.pth", help="Path to pretrained checkpoint")
+    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth", help="Path to pretrained checkpoint")
     
     # Dataset arguments
     parser.add_argument("--dataset", choices=["cifar10", "cifar100", "imagenet"], default="cifar100", help="Dataset to use")
@@ -143,6 +145,17 @@ def main():
     if is_main_process:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize SwanLab
+        method_name = "daga" if args.use_daga else "baseline"
+        exp_name = f"{args.dataset}_logreg_{method_name}_L{'-'.join(map(str, args.daga_layers)) if args.use_daga else ''}_{date.today()}"
+        swanlab.init(
+            workspace="NUDT_SSL__CVPR",
+            project="DINOv3-Logistic-Regression",
+            experiment_name=exp_name,
+            config=vars(args),
+        )
+        
         print(f"\n{'='*70}")
         print(f"Logistic Regression Evaluation with {world_size} GPUs")
         print(f"DAGA: {'Enabled' if args.use_daga else 'Disabled'}")
@@ -169,13 +182,13 @@ def main():
     dataset_mapping = {
         "cifar10": f"CIFAR10:split=TRAIN:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TRAIN:root={args.data_path}",
-        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}",
+        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}:extra={args.data_path}",
     }
     
     test_dataset_mapping = {
         "cifar10": f"CIFAR10:split=TEST:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TEST:root={args.data_path}",
-        "imagenet": f"ImageNet:split=VAL:root={args.data_path}",
+        "imagenet": f"ImageNet:split=VAL:root={args.data_path}:extra={args.data_path}",
     }
     
     train_dataset_str = dataset_mapping[args.dataset]
@@ -261,6 +274,15 @@ def main():
                         f.write(f"{k}: {v}\n")
             
             print(f"✓ Results saved to {results_file}")
+            
+            # Log to SwanLab
+            log_dict = {}
+            for k, v in results.items():
+                if isinstance(v, (int, float)):
+                    log_dict[k] = v * 100 if v < 1 else v
+            
+            swanlab.log(log_dict)
+            print(f"✓ Results logged to SwanLab")
     
     except Exception as e:
         if is_main_process:
@@ -268,6 +290,8 @@ def main():
             import traceback
             traceback.print_exc()
     finally:
+        if is_main_process:
+            swanlab.finish()
         cleanup_ddp()
 
 

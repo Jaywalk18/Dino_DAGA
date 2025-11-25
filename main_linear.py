@@ -14,6 +14,8 @@ import sys
 from core.backbones import load_dinov3_backbone
 from core.utils import setup_environment
 from core.ddp_utils import setup_ddp, cleanup_ddp
+import swanlab
+from datetime import date
 
 # Add dinov3 to path
 dinov3_path = '/home/user/zhoutianjian/Dino_DAGA/dinov3'
@@ -116,7 +118,7 @@ def parse_arguments():
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="dinov3_vitb16", help="DINOv3 model architecture")
-    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m.pth", help="Path to pretrained checkpoint")
+    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth", help="Path to pretrained checkpoint")
     
     # Dataset arguments
     parser.add_argument("--dataset", choices=["cifar10", "cifar100", "imagenet"], default="cifar100", help="Dataset to use")
@@ -161,6 +163,17 @@ def main():
     if is_main_process:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize SwanLab
+        method_name = "daga" if args.use_daga else "baseline"
+        exp_name = f"{args.dataset}_linear_{method_name}_L{'-'.join(map(str, args.daga_layers)) if args.use_daga else ''}_{date.today()}"
+        swanlab.init(
+            workspace="NUDT_SSL__CVPR",
+            project="DINOv3-Linear-Probing",
+            experiment_name=exp_name,
+            config=vars(args),
+        )
+        
         print(f"\n{'='*70}")
         print(f"Linear Probe Evaluation with {world_size} GPUs")
         print(f"DAGA: {'Enabled' if args.use_daga else 'Disabled'}")
@@ -187,13 +200,13 @@ def main():
     dataset_mapping = {
         "cifar10": f"CIFAR10:split=TRAIN:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TRAIN:root={args.data_path}",
-        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}",
+        "imagenet": f"ImageNet:split=TRAIN:root={args.data_path}:extra={args.data_path}",
     }
     
     val_dataset_mapping = {
         "cifar10": f"CIFAR10:split=TEST:root={args.data_path}",
         "cifar100": f"CIFAR100:split=TEST:root={args.data_path}",
-        "imagenet": f"ImageNet:split=VAL:root={args.data_path}",
+        "imagenet": f"ImageNet:split=VAL:root={args.data_path}:extra={args.data_path}",
     }
     
     train_dataset_str = dataset_mapping[args.dataset]
@@ -309,6 +322,29 @@ def main():
             
             print(f"✓ Results saved to {results_file}")
             print(f"✓ Detailed results also in: results_all_classifiers.json")
+            
+            # Log to SwanLab - Include all learning rates
+            # Use epoch=1 as the final step for linear probe results
+            log_dict = {"epoch": 1}
+            for k, v in results.items():
+                if k != "all_classifiers" and isinstance(v, (int, float)):
+                    log_dict[k] = v * 100 if v < 1 else v
+            
+            # Log all learning rates individually
+            if "all_classifiers" in results and results["all_classifiers"]:
+                print(f"\n📊 Logging all {len(results['all_classifiers'])} learning rates to SwanLab...")
+                for classifier_name, metrics in results["all_classifiers"].items():
+                    # Extract learning rate from name: classifier_1_blocks_avgpool_True_lr_0_02500 -> 0.025
+                    lr_str = classifier_name.split("_lr_")[-1].replace("_", ".")
+                    top1_acc = metrics["top-1"] * 100
+                    log_dict[f"linear_probe/lr_{lr_str}_top1"] = top1_acc
+                    if metrics.get("top-5") is not None:
+                        top5_acc = metrics["top-5"] * 100
+                        log_dict[f"linear_probe/lr_{lr_str}_top5"] = top5_acc
+            
+            # Use a fixed step for final results (end of training)
+            swanlab.log(log_dict, step=args.linear_epochs)
+            print(f"✓ Results logged to SwanLab (including {len(results.get('all_classifiers', {}))} LRs)")
     
     except Exception as e:
         if is_main_process:
@@ -316,6 +352,8 @@ def main():
             import traceback
             traceback.print_exc()
     finally:
+        if is_main_process:
+            swanlab.finish()
         cleanup_ddp()
 
 

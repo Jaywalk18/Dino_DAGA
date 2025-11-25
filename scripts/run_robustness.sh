@@ -43,25 +43,34 @@ echo "Corruption Types: ${CORRUPTION_TYPES}"
 echo "Severity Levels: ${SEVERITY_LEVELS}"
 echo ""
 
+# Trained checkpoint path (IMPORTANT: must use ImageNet-trained model!)
+# Update these paths after running classification training
+BASELINE_TRAINED_CHECKPOINT="outputs/classification/01_baseline/imagenet_baseline_L_2025-11-21/best_model.pth"
+DAGA_TRAINED_CHECKPOINT="outputs/classification/04_daga_hourglass_layer/imagenet_daga_L1-2-10-11_2025-11-21/best_model.pth"
+
 # Run experiments
 echo -e "\n📝 Running full robustness evaluation"
 echo -e "   - Corruption types: ${CORRUPTION_TYPES}"
 echo -e "   - Severity levels: ${SEVERITY_LEVELS}\n"
 
 # Baseline model - no DAGA
+# Uncomment after training classification baseline model
 run_experiment "main_robustness.py" "01_baseline" "Baseline (No DAGA)" \
+    --trained_checkpoint "$BASELINE_TRAINED_CHECKPOINT" \
     --corruption_types $CORRUPTION_TYPES --severity_levels $SEVERITY_LEVELS
 
-# Uncomment below to run DAGA experiments:
-# # DAGA last layer
-# run_experiment "main_robustness.py" "02_daga_last_layer" "DAGA Single Layer (L11)" \
-#     --use_daga --daga_layers 11 \
-#     --corruption_types $CORRUPTION_TYPES --severity_levels $SEVERITY_LEVELS
-# 
-# # DAGA hourglass layers
-# run_experiment "main_robustness.py" "03_daga_hourglass" "DAGA Four Layers (L1,L2,L10,L11)" \
-#     --use_daga --daga_layers 1 2 10 11 \
-#     --corruption_types $CORRUPTION_TYPES --severity_levels $SEVERITY_LEVELS
+# DAGA experiments
+# Uncomment after training classification DAGA model
+run_experiment "main_robustness.py" "03_daga_hourglass" "DAGA Four Layers (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11 \
+    --trained_checkpoint "$DAGA_TRAINED_CHECKPOINT" \
+    --corruption_types $CORRUPTION_TYPES --severity_levels $SEVERITY_LEVELS
+
+echo -e "\n⚠️  Robustness evaluation requires trained classification models!"
+echo -e "   Steps:"
+echo -e "   1. Train classification models first: bash scripts/run_classification.sh"
+echo -e "   2. Update checkpoint paths above"
+echo -e "   3. Uncomment the experiment lines you want to run"
 
 echo -e "\n🎉 Robustness evaluation completed!"
 

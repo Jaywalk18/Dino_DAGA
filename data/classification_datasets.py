@@ -99,7 +99,11 @@ class ImageNetValDataset(torch.utils.data.Dataset):
         with open(annotation_file, "r") as f:
             for line in f:
                 img_name, class_id = line.strip().split("\t")
+                # Support both flat and organized directory structures
                 img_path = os.path.join(self.root_dir, img_name)
+                if not os.path.exists(img_path):
+                    # Try class folder structure
+                    img_path = os.path.join(self.root_dir, class_id, img_name)
 
                 if class_id in self.class_to_idx:
                     class_idx = self.class_to_idx[class_id]

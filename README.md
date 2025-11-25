@@ -27,30 +27,87 @@ DAGA (Dynamic Attention-Guided Adaptation) is a parameter-efficient fine-tuning 
 
 ### Environment Setup
 
+**⚠️ Important: Always activate the virtual environment before running any scripts!**
+
 ```bash
-# Create conda environment
+# Create conda environment with Python 3.11
 conda create -n dinov3_env python=3.11 -y
 conda activate dinov3_env
+
+# Install PyTorch (CUDA 11.8)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install DINOv3
 cd dinov3
 pip install -e .
+cd ..
 
 # Install additional dependencies
-cd ..
 pip install -r requirements.txt
 ```
+
+### Dependencies List
+
+The project requires the following packages (included in `requirements.txt`):
+
+**Core Dependencies:**
+- `torch` >= 2.0.0 (with CUDA support)
+- `torchvision` >= 0.15.0
+- `tqdm` >= 4.65.0
+- `numpy` >= 1.23.0
+
+**Logging & Visualization:**
+- `swanlab` >= 0.7.0 (experiment tracking)
+- `matplotlib` >= 3.7.0
+- `opencv-python` >= 4.8.0
+
+**Data Processing:**
+- `pandas` >= 2.0.0
+- `openpyxl` >= 3.1.0
+- `h5py` (for NYU Depth V2)
+
+**Task-Specific:**
+- `pycocotools` >= 2.0.6 (for COCO detection)
 
 ### Verify Installation
 
 ```bash
+conda activate dinov3_env
 python -c "import dinov3; print('✓ DINOv3 installed')"
 python -c "import torch; print(f'✓ PyTorch {torch.__version__}')"
+python -c "import swanlab; print('✓ SwanLab installed')"
+python -c "import pycocotools; print('✓ pycocotools installed')"
 ```
 
 ---
 
 ## Quick Start
+
+### 0. Pre-flight Checklist ✅
+
+Before running any experiments, make sure:
+
+```bash
+# 1. Activate environment
+conda activate dinov3_env
+
+# 2. Verify environment
+which python  # Should show: /home/user/.conda/envs/dinov3_env/bin/python
+
+# 3. Test imports
+python << EOF
+import torch
+import dinov3
+import swanlab
+import pandas
+import pycocotools
+import h5py
+print("✅ All dependencies installed!")
+EOF
+
+# 4. Check GPU availability
+python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
+```
 
 ### 1. Download Pretrained Weights
 
@@ -140,7 +197,21 @@ Apply DAGA to specific transformer layers:
 
 ### SwanLab Logging
 
-SwanLab is used for experiment tracking. To disable:
+SwanLab is used for experiment tracking with workspace: `NUDT_SSL__CVPR`
+
+**Project mapping:**
+- Classification → `DINOv3-ImageNet-Classification`
+- Detection → `DINOv3-COCO-Detection`
+- Segmentation → `DINOv3-ADE20K-Segmentation`
+- Depth → `DINOv3-NYUv2-Depth`
+- Robustness → `DINOv3-ImageNet-C-Robustness`
+- Linear/LogReg/KNN → `DINOv3-Linear-Probing` / `DINOv3-Logistic-Regression` / `DINOv3-KNN-Evaluation`
+
+**About X-axis (step vs epoch):**
+- **Training tasks** (Classification, Detection, Segmentation, Depth): Use `epoch` as step
+- **Evaluation tasks** (Linear, LogReg, KNN): Use `iteration` as step (these don't have traditional epochs)
+
+To disable SwanLab:
 
 ```bash
 # In scripts/common_config.sh
@@ -227,10 +298,34 @@ NUM_WORKERS=0
 
 ### Module Not Found
 
+**⚠️ IMPORTANT: Always activate dinov3_env before running any scripts!**
+
+```bash
+# Check current environment
+conda info --envs
+
+# Activate the correct environment
+conda activate dinov3_env
+
+# Verify you're in the right environment
+which python
+# Should output: /home/user/.conda/envs/dinov3_env/bin/python
+
+# Install missing dependencies
+pip install -r requirements.txt
+cd dinov3 && pip install -e . && cd ..
+```
+
+**Common missing modules:**
+- `pandas` → `pip install pandas`
+- `openpyxl` → `pip install openpyxl`
+- `pycocotools` → `pip install pycocotools`
+- `h5py` → `pip install h5py`
+
+**Quick fix for all dependencies:**
 ```bash
 conda activate dinov3_env
-pip install -r requirements.txt
-cd dinov3 && pip install -e .
+pip install pandas openpyxl pycocotools h5py
 ```
 
 ---

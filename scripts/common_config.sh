@@ -8,7 +8,7 @@
 setup_environment() {
     # Activate conda environment
     source activate dinov3_env
-    export SWANLAB_MODE=disabled
+    export SWANLAB_MODE=cloud
     
     # DDP Environment Variables for better multi-GPU performance
     export NCCL_DEBUG=INFO
@@ -23,11 +23,11 @@ setup_environment() {
 # ============================================================================
 # Model settings
 MODEL_NAME="${MODEL_NAME:-dinov3_vitb16}"
-PRETRAINED_PATH="${PRETRAINED_PATH:-dinov3_vitb16_pretrain_lvd1689m.pth}"
+PRETRAINED_PATH="${PRETRAINED_PATH:-dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth}"
 
 # Path settings
 PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
-CHECKPOINT_DIR="/home/user/zhoutianjian/DAGA/checkpoints"
+CHECKPOINT_DIR="/home/user/zhoutianjian/Dino_DAGA/checkpoints"
 
 # GPU Configuration
 DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-2,3,4,5,6}"  

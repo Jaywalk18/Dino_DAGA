@@ -25,8 +25,8 @@ dinov3_path = '/home/user/zhoutianjian/Dino_DAGA/dinov3'
 if dinov3_path not in sys.path:
     sys.path.insert(0, dinov3_path)
 
-from dinov3.eval.dense.depth.models import build_depther
-from dinov3.eval.dense.depth.models.encoder import BackboneLayersSet
+from dinov3.eval.depth.models import build_depther
+from dinov3.eval.depth.models.encoder import BackboneLayersSet
 
 warnings.filterwarnings("ignore")
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
@@ -228,7 +228,7 @@ def parse_arguments():
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="dinov3_vitb16", help="DINOv3 model architecture")
-    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m.pth", help="Path to pretrained checkpoint")
+    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth", help="Path to pretrained checkpoint")
     
     # Dataset arguments
     parser.add_argument("--dataset", choices=["nyu_depth_v2", "kitti"], default="nyu_depth_v2", help="Dataset to use")

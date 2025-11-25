@@ -5,8 +5,19 @@
 # Progress bars and logging
 tqdm>=4.65.0
 swanlab>=0.7.0
+pandas>=2.0.0
+openpyxl>=3.1.0
 
 # Visualization
 matplotlib>=3.7.0
 opencv-python>=4.8.0
+
+# Detection (COCO)
+pycocotools>=2.0.6
+
+# Depth Estimation (NYU Depth V2)
+h5py>=3.8.0
+
+# Logistic Regression Acceleration (optional but highly recommended)
+scikit-learn-intelex>=2024.0.0  # Speeds up sklearn 10-100x
 

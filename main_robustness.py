@@ -38,11 +38,18 @@ CORRUPTION_TYPES = [
 
 class RobustnessModel(nn.Module):
     """Classification model for robustness evaluation with optional DAGA"""
-    def __init__(self, vit_model, num_classes=1000, use_daga=False, daga_layers=None):
+    def __init__(self, vit_model, num_classes=1000, use_daga=False, daga_layers=None, checkpoint_path=None):
         super().__init__()
         self.vit_model = vit_model
         self.use_daga = use_daga
         self.daga_layers = daga_layers if daga_layers else []
+        
+        # Initialize DAGA modules if needed
+        if self.use_daga:
+            from core.daga import DAGA
+            self.daga_modules = nn.ModuleDict({
+                str(i): DAGA(feature_dim=vit_model.embed_dim) for i in daga_layers
+            })
         
         # Freeze backbone
         for param in self.vit_model.parameters():
@@ -50,8 +57,49 @@ class RobustnessModel(nn.Module):
         
         # Classification head
         self.classifier = nn.Linear(vit_model.embed_dim, num_classes)
-        nn.init.normal_(self.classifier.weight, std=0.01)
-        nn.init.zeros_(self.classifier.bias)
+        
+        # Load checkpoint if provided (trained classifier + DAGA weights)
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            print(f"Loading trained weights from: {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+            if 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+                
+                # Remove 'module.' prefix if present (from DDP)
+                cleaned_state_dict = {}
+                for key, value in state_dict.items():
+                    clean_key = key.replace('module.', '') if key.startswith('module.') else key
+                    cleaned_state_dict[clean_key] = value
+                
+                # Load classifier weights
+                classifier_state_dict = {k.replace('classifier.', ''): v 
+                                        for k, v in cleaned_state_dict.items() 
+                                        if k.startswith('classifier.')}
+                if classifier_state_dict:
+                    self.classifier.load_state_dict(classifier_state_dict)
+                    print(f"✓ Loaded trained classifier weights")
+                else:
+                    print(f"⚠ No classifier weights found in checkpoint")
+                
+                # Load DAGA weights if using DAGA
+                if self.use_daga:
+                    daga_state_dict = {}
+                    for key, value in cleaned_state_dict.items():
+                        if 'daga_modules.' in key:
+                            daga_key = key.split('daga_modules.')[-1]
+                            daga_state_dict[daga_key] = value
+                    
+                    if daga_state_dict:
+                        self.daga_modules.load_state_dict(daga_state_dict, strict=False)
+                        print(f"✓ Loaded {len(daga_state_dict)} trained DAGA weights")
+                    else:
+                        print(f"⚠ No DAGA weights found in checkpoint")
+        else:
+            if checkpoint_path:
+                print(f"⚠ Checkpoint not found: {checkpoint_path}")
+            print(f"⚠ Using random initialization for classifier (accuracy will be ~0.1%)")
+            nn.init.normal_(self.classifier.weight, std=0.01)
+            nn.init.zeros_(self.classifier.bias)
     
     def forward(self, x):
         """Forward pass"""
@@ -94,7 +142,8 @@ def parse_arguments():
     
     # Model arguments
     parser.add_argument("--model_name", type=str, default="dinov3_vitb16", help="DINOv3 model architecture")
-    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m.pth", help="Path to pretrained checkpoint")
+    parser.add_argument("--pretrained_path", type=str, default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth", help="Path to pretrained backbone checkpoint")
+    parser.add_argument("--trained_checkpoint", type=str, default=None, help="Path to trained classification checkpoint (with classifier + DAGA weights)")
     
     # Dataset arguments
     parser.add_argument("--dataset", type=str, default="imagenet_c", help="Dataset name")
@@ -293,7 +342,19 @@ def main():
         print(f"Loading DINOv3 model '{args.model_name}'...")
     
     vit_model = load_dinov3_backbone(args.model_name, args.pretrained_path)
-    model = RobustnessModel(vit_model, num_classes=1000, use_daga=args.use_daga, daga_layers=args.daga_layers)
+    
+    # Convert relative checkpoint path to absolute if needed
+    checkpoint_path = args.trained_checkpoint
+    if checkpoint_path and not os.path.isabs(checkpoint_path):
+        checkpoint_path = os.path.join(os.getcwd(), checkpoint_path)
+    
+    model = RobustnessModel(
+        vit_model, 
+        num_classes=1000, 
+        use_daga=args.use_daga, 
+        daga_layers=args.daga_layers,
+        checkpoint_path=checkpoint_path
+    )
     model.to(device)
     
     # Wrap with DDP
