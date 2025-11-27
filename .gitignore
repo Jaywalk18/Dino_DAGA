@@ -4,6 +4,9 @@ segmentation_results/
 .qoder/
 outputs/
 visualization/results/
+
+# 论文对比实验（不公开发布）
+paper_experiments/
 # Python 缓存
 __pycache__/
 *.py[cod]

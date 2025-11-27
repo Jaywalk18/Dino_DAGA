@@ -44,10 +44,20 @@ def save_checkpoint(model, optimizer, epoch, best_metric, args, path, vis_data=N
 def setup_logging(args, task_name="classification"):
     """Setup SwanLab logging"""
     import os
-    method_name = "daga" if args.use_daga else "baseline"
+    
+    # Support both use_daga (original) and method (comparison) styles
+    if hasattr(args, 'method'):
+        # Paper comparison style
+        method_name = args.method
+        layers_str = '-'.join(map(str, args.adaptation_layers))
+    else:
+        # Original style
+        method_name = "daga" if args.use_daga else "baseline"
+        layers_str = '-'.join(map(str, args.daga_layers)) if args.use_daga else ''
+    
     exp_name = (
         args.swanlab_name
-        or f"{args.dataset}_{method_name}_L{'-'.join(map(str, args.daga_layers)) if args.use_daga else ''}_{date.today()}"
+        or f"{args.dataset}_{method_name}_L{layers_str}_{date.today()}"
     )
     
     # Check both environment variable and args attribute
@@ -59,8 +69,10 @@ def setup_logging(args, task_name="classification"):
     
     if enable_swanlab:
         # Define project names for different tasks
+        # Paper comparison experiments use the same projects as main experiments
         project_mapping = {
             "classification": "DINOv3-ImageNet-Classification",
+            "dinotxt": "DINOv3-COCO-TextImageAlignment",
             "detection": "DINOv3-COCO-Detection", 
             "segmentation": "DINOv3-ADE20K-Segmentation",
             "depth": "DINOv3-NYUv2-Depth",
@@ -68,15 +80,20 @@ def setup_logging(args, task_name="classification"):
             "linear": "DINOv3-Linear-Probing",
             "logreg": "DINOv3-Logistic-Regression",
             "knn": "DINOv3-KNN-Evaluation",
+            "paper_comparison": "DINOv3-ImageNet-Classification",  # Use same as classification
         }
         
         project_name = project_mapping.get(task_name, f"DINOv3-{task_name}")
+        
+        # Get mode from environment or args
+        mode = swanlab_mode if swanlab_mode else getattr(args, 'swanlab_mode', 'cloud')
         
         swanlab.init(
             workspace="NUDT_SSL__CVPR",
             project=project_name,
             experiment_name=exp_name,
             config=vars(args),
+            mode=mode,
         )
     return exp_name
 

@@ -21,3 +21,18 @@ h5py>=3.8.0
 # Logistic Regression Acceleration (optional but highly recommended)
 scikit-learn-intelex>=2024.0.0  # Speeds up sklearn 10-100x
 
+# DINOtxt (Text-Image Alignment)
+# CLIP pretrained text encoder for faster convergence
+# Download CLIP ViT-B/16 weights:
+#   mkdir -p checkpoints
+#   wget -O checkpoints/clip_vit_b16.pt \
+#     "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt"
+# The text encoder config (matching CLIP ViT-B/16):
+#   - embed_dim: 512
+#   - num_layers: 12
+#   - num_heads: 8
+#   - vocab_size: 49408
+#   - max_seq_len: 77
+regex>=2023.0.0  # Required for CLIP BPE tokenizer
+ftfy>=6.1.0      # Text cleaning for CLIP tokenizer
+

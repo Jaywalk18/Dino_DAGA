@@ -16,7 +16,7 @@ DATA_PATH="/home/user/zhoutianjian/DataSets/imagenet"
 BASE_OUTPUT_DIR="outputs/classification"
 
 # Training hyperparameters (matching raw_code for optimal performance)
-EPOCHS=20
+EPOCHS=50
 BATCH_SIZE=256
 INPUT_SIZE=224
 LR=5e-1
