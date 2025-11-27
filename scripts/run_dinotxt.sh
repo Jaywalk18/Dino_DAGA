@@ -21,7 +21,7 @@ SAMPLE_RATIO=""  # Empty = use full dataset
 
 # Training configuration (following official DINOv3 DINOtxt config)
 EPOCHS=100
-LR=1e-3     # Reduced from 7e-4 - more stable for contrastive learning
+LR=7e-4     # Reduced from 7e-4 - more stable for contrastive learning
 WARMUP_EPOCHS=10  # Increased warmup for better stability
 LOG_FREQ=10 
 
