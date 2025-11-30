@@ -2,50 +2,155 @@
 # Classification training script
 set -e
 
-# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Load common configuration
 source "${SCRIPT_DIR}/common_config.sh"
-
 # ============================================================================
-# Task-Specific Configuration
+# Common Settings
 # ============================================================================
-DATASET="imagenet"
-DATA_PATH="/home/user/zhoutianjian/DataSets/imagenet"
 BASE_OUTPUT_DIR="outputs/classification"
-
-# Training hyperparameters (matching raw_code for optimal performance)
-EPOCHS=50
-BATCH_SIZE=256
 INPUT_SIZE=224
-LR=5e-1
-NUM_WORKERS=16  # Data loading workers
-SAMPLE_RATIO=""  # Empty = use full dataset
-LOG_FREQ=10
-
-# Override default GPU if needed
-# DEFAULT_GPU_IDS="3,4,5,6"  # Uncomment to override default
+BATCH_SIZE=256
+NUM_WORKERS=16
+SAMPLE_RATIO=""  # e.g. "0.1" for 10%
+LOG_FREQ=5
 
 # ============================================================================
-# Main Execution
+# Dataset Configuration (uncomment one block to use)
 # ============================================================================
+
+# --- CIFAR-100 (100 classes, 50K/10K, 32x32) ---
+DATASET="cifar100"
+DATA_PATH="/home/user/zhoutianjian/DataSets/cifar"
+EPOCHS=20
+LR=4e-4
+
 setup_environment
 setup_paths
 mkdir -p "$BASE_OUTPUT_DIR"
 
 print_config "Classification"
 
-# Run experiments
+# run_experiment "main_classification.py" "01_baseline" "Baseline"
+
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11
+
+echo -e "\n🎉 Classification training completed!"
+
+# --- Food-101 (101 classes, 75K/25K) ---
+# DATASET="food101"
+# DATA_PATH="/home/user/zhoutianjian/DataSets/food-101"
+# EPOCHS=20
+# LR=5e-3
+
+# --- ImageNet (1000 classes, 1.2M/50K) ---
+# DATASET="imagenet"
+# DATA_PATH="/home/user/zhoutianjian/DataSets/imagenet"
+# EPOCHS=50
+# LR=5e-1
+
+
+
+# --- Oxford Pets (37 classes, 3.7K/3.7K) ---
+DATASET="pets"
+DATA_PATH="/home/user/zhoutianjian/DataSets/OpenDataLab___Oxford-IIIT_Pets/raw"
+EPOCHS=100
+LR=5e-3
+
+
+setup_environment
+setup_paths
+mkdir -p "$BASE_OUTPUT_DIR"
+
+print_config "Classification"
+
 run_experiment "main_classification.py" "01_baseline" "Baseline"
 
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11
+
+echo -e "\n🎉 Classification training completed!"
 
 
-# Alternative: visualize middle layer to see early DAGA effects clearly
-# run_experiment "main_classification.py" "03_daga_hourglass_vis_early" "DAGA Four Layers, Vis at L5" \
-#     --use_daga --daga_layers 1 2 10 11 --vis_attn_layer 11
+# --- Stanford Cars (196 classes, 8K/8K) ---
+DATASET="cars"
+DATA_PATH="/home/user/zhoutianjian/DataSets/OpenDataLab___Stanford_Cars/raw/Stanford_Cars"
+EPOCHS=60
+LR=5e-3
 
-run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA Four Layers (L1,L2,L10,L11)" \
+setup_environment
+setup_paths
+mkdir -p "$BASE_OUTPUT_DIR"
+
+print_config "Classification"
+
+run_experiment "main_classification.py" "01_baseline" "Baseline"
+
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11
+
+echo -e "\n🎉 Classification training completed!"
+
+
+# --- SUN397 (397 classes, ~80K/20K) ---
+DATASET="sun397"
+DATA_PATH="/home/user/zhoutianjian/DataSets/OpenDataLab___SUN397/raw/SUN397"
+EPOCHS=30
+LR=5e-3
+
+
+setup_environment
+setup_paths
+mkdir -p "$BASE_OUTPUT_DIR"
+
+print_config "Classification"
+
+run_experiment "main_classification.py" "01_baseline" "Baseline"
+
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11
+
+echo -e "\n🎉 Classification training completed!"
+
+
+# --- DTD (47 classes, ~2K/2K) ---
+DATASET="dtd"
+DATA_PATH="/home/user/zhoutianjian/DataSets/OpenDataLab___DTD/raw/dtd"
+EPOCHS=100
+LR=5e-3
+
+setup_environment
+setup_paths
+mkdir -p "$BASE_OUTPUT_DIR"
+
+print_config "Classification"
+
+run_experiment "main_classification.py" "01_baseline" "Baseline"
+
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
+    --use_daga --daga_layers 1 2 10 11
+
+echo -e "\n🎉 Classification training completed!"
+
+
+
+# --- Flowers-102 (102 classes, 1K train/6K test) ---
+# NOTE: Small dataset, use smaller batch size to avoid empty dataloader in DDP
+DATASET="flowers102"
+DATA_PATH="/home/user/zhoutianjian/DataSets/OpenDataLab___Oxford_102_Flower/raw"
+EPOCHS=100
+LR=5e-3
+BATCH_SIZE=32  
+
+setup_environment
+setup_paths
+mkdir -p "$BASE_OUTPUT_DIR"
+
+print_config "Classification"
+
+run_experiment "main_classification.py" "01_baseline" "Baseline"
+
+run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
     --use_daga --daga_layers 1 2 10 11
 
 echo -e "\n🎉 Classification training completed!"

@@ -41,7 +41,8 @@ def parse_arguments():
     
     parser.add_argument(
         "--dataset",
-        choices=["cifar10", "cifar100", "imagenet100", "imagenet"],
+        choices=["cifar10", "cifar100", "imagenet100", "imagenet", "food101", 
+                 "flowers102", "pets", "cars", "sun397", "dtd"],
         default="cifar100",
         help="Dataset to use",
     )

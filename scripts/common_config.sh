@@ -30,7 +30,7 @@ PROJECT_ROOT="/home/user/zhoutianjian/Dino_DAGA"
 CHECKPOINT_DIR="/home/user/zhoutianjian/Dino_DAGA/checkpoints"
 
 # GPU Configuration
-DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-2,3,4,5,6}"  
+DEFAULT_GPU_IDS="${DEFAULT_GPU_IDS:-1,2,3,4,5,6}"  
 GPU_IDS="${GPU_IDS:-$DEFAULT_GPU_IDS}"
 
 # Training settings

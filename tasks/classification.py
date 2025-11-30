@@ -140,9 +140,12 @@ def setup_training_components(model, args, world_size=1):
         args: Training arguments
         world_size: Number of GPUs in DDP training (default: 1)
     """
+    from torch.nn.parallel import DistributedDataParallel as DDP
+    
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     
-    base_model = model.module if isinstance(model, DataParallel) else model
+    # Handle both DataParallel and DistributedDataParallel
+    base_model = model.module if isinstance(model, (DataParallel, DDP)) else model
     
     daga_params = []
     classifier_params = []
@@ -234,7 +237,13 @@ def evaluate(model, dataloader, device):
 def visualize_attention_comparison(
     model, fixed_images, args, output_dir, epoch, test_dataset=None
 ):
-    """Generate attention comparison visualizations"""
+    """Generate attention comparison visualizations
+    
+    Baseline: 1x2 layout - [Original Image, Frozen Backbone Attn]
+    DAGA: 1x4 layout - [Original Image, Frozen Backbone Attn, Adapted Attn, Adapted Attn Overlay]
+    """
+    from scipy.ndimage import zoom
+    
     if fixed_images is None:
         return []
     
@@ -244,81 +253,61 @@ def visualize_attention_comparison(
     
     class_names = getattr(test_dataset, "classes", None)
     
-    # Debug: Print DAGA status and mix_weights
-    from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
-    actual_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
-    if hasattr(actual_model, 'use_daga') and actual_model.use_daga:
-        print(f"\n[DEBUG] DAGA Status at epoch {epoch+1}:")
-        print(f"  DAGA layers: {actual_model.daga_layers}")
-        print(f"  Visualization layer: {actual_model.vis_attn_layer}")
-        print(f"  Mix weights:")
-        for layer_idx, daga_module in actual_model.daga_modules.items():
-            print(f"    Layer {layer_idx}: {daga_module.mix_weight.item():.6f}")
-        print(f"\n  NOTE: Attention extraction timing:")
-        print(f"    - At layer L, attention is extracted BEFORE L's forward pass")
-        print(f"    - DAGA is applied AFTER L's forward pass")
-        print(f"    - So L{actual_model.vis_attn_layer} attention shows effects of DAGA from layers < {actual_model.vis_attn_layer}")
-        if actual_model.vis_attn_layer in actual_model.daga_layers:
-            print(f"    - WARNING: Layer {actual_model.vis_attn_layer} has DAGA but applied AFTER attention extraction")
-            earlier_daga_layers = [l for l in actual_model.daga_layers if l < actual_model.vis_attn_layer]
-            if earlier_daga_layers:
-                print(f"    - Visible DAGA effects: layers {earlier_daga_layers}")
-            else:
-                print(f"    - NO earlier DAGA layers! Attention may look similar to baseline.")
-        print()
-    
     # Get actual model from DDP wrapper if needed
     from torch.nn.parallel import DataParallel, DistributedDataParallel as DDP
     actual_base_model = base_model.module if isinstance(base_model, (DataParallel, DDP)) else base_model
     
+    is_daga_model = getattr(actual_base_model, "use_daga", False)
+    
+    # Print DAGA status
+    if is_daga_model:
+        print(f"\n[DAGA] Status at epoch {epoch+1}:")
+        print(f"  Layers: {actual_base_model.daga_layers}")
+        print(f"  Mix weights:")
+        for layer_idx, daga_module in actual_base_model.daga_modules.items():
+            print(f"    Layer {layer_idx}: {daga_module.mix_weight.item():.6f}")
+    
     with torch.no_grad():
         _, (H, W) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
         num_patches_expected = H * W
-        
-        logits, adapted_attn_weights, daga_guidance_map = base_model(
-            fixed_images, request_visualization_maps=True
-        )
-        
-        if adapted_attn_weights is None:
-            print("⚠ Warning: Could not generate adapted attention maps from the model.")
-            return []
-        
-        adapted_attn_np = process_attention_weights(adapted_attn_weights, num_patches_expected, H, W)
-        if adapted_attn_np is None:
-            return []
-        
-        predictions = logits.argmax(dim=1).cpu().numpy()
-        
-        # Get visualization layer from actual base model (unwrapped)
         vis_attn_layer = actual_base_model.vis_attn_layer
         
-        with torch.no_grad():
-            x_proc, (H_baseline, W_baseline) = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
-            assert H == H_baseline and W == W_baseline
-            
-            baseline_raw_weights = None
-            for i in range(vis_attn_layer + 1):
-                rope_sincos = (
-                    actual_base_model.vit.rope_embed(H=H, W=W)
-                    if actual_base_model.vit.rope_embed
-                    else None
+        # Always get baseline attention (frozen backbone)
+        x_proc, _ = actual_base_model.vit.prepare_tokens_with_masks(fixed_images)
+        baseline_raw_weights = None
+        for i in range(vis_attn_layer + 1):
+            rope_sincos = (
+                actual_base_model.vit.rope_embed(H=H, W=W)
+                if actual_base_model.vit.rope_embed
+                else None
+            )
+            if i == vis_attn_layer:
+                baseline_raw_weights = get_attention_map(
+                    actual_base_model.vit.blocks[i], x_proc
                 )
-                
-                if i == vis_attn_layer:
-                    baseline_raw_weights = get_attention_map(
-                        actual_base_model.vit.blocks[i], x_proc
-                    )
-                
-                x_proc = actual_base_model.vit.blocks[i](x_proc, rope_sincos)
+            x_proc = actual_base_model.vit.blocks[i](x_proc, rope_sincos)
         
         if baseline_raw_weights is None:
-            print(f"⚠ Warning: Failed to extract baseline attention weights from layer {vis_attn_layer}.")
+            print(f"⚠ Warning: Failed to extract baseline attention from layer {vis_attn_layer}.")
             return []
         
         baseline_attn_np = process_attention_weights(baseline_raw_weights, num_patches_expected, H, W)
         if baseline_attn_np is None:
             return []
         
+        # Get adapted attention and predictions (only for DAGA model)
+        adapted_attn_np = None
+        daga_guidance_map = None
+        
+        logits, adapted_attn_weights, daga_guidance_map = base_model(
+            fixed_images, request_visualization_maps=True
+        )
+        predictions = logits.argmax(dim=1).cpu().numpy()
+        
+        if is_daga_model and adapted_attn_weights is not None:
+            adapted_attn_np = process_attention_weights(adapted_attn_weights, num_patches_expected, H, W)
+        
+        # Prepare images
         images_np = fixed_images.cpu().numpy()
         vis_save_path = Path(output_dir) / "visualizations"
         vis_save_path.mkdir(parents=True, exist_ok=True)
@@ -339,38 +328,61 @@ def visualize_attention_comparison(
             pred_correct = "✓" if actual_label_name == pred_label_name else "✗"
             fig_title = f"Epoch {epoch+1} - Img#{original_image_index} | True: {actual_label_name} | Pred: {pred_label_name} {pred_correct}"
             
-            # Create figure with 4 subplots if DAGA guidance map is available
-            is_daga_model = getattr(actual_base_model, "use_daga", False)
-            num_plots = 4 if (is_daga_model and daga_guidance_map is not None) else 3
-            fig, axes = plt.subplots(1, num_plots, figsize=(5*num_plots, 5))
-            fig.suptitle(fig_title, fontsize=14, fontweight="bold")
-            
+            # Denormalize image
             img = images_np[j].transpose(1, 2, 0)
             mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
             img = np.clip(std * img + mean, 0, 1)
-            axes[0].imshow(img)
-            axes[0].set_title("Original Image")
-            axes[0].axis("off")
             
-            axes[1].imshow(baseline_attn_np[j], cmap="viridis")
-            axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
-            axes[1].axis("off")
-            
-            adapted_title = (
-                f"Adapted (DAGA) Attn (L{vis_attn_layer})"
-                if is_daga_model
-                else f"Finetuned Model Attn (L{vis_attn_layer})"
-            )
-            axes[2].imshow(adapted_attn_np[j], cmap="viridis")
-            axes[2].set_title(adapted_title)
-            axes[2].axis("off")
-            
-            # Add DAGA guidance map if available
-            if is_daga_model and daga_guidance_map is not None:
-                guidance_np = daga_guidance_map[j].cpu().numpy()
-                axes[3].imshow(guidance_np, cmap="hot")
-                axes[3].set_title(f"DAGA Guidance Map (L{actual_base_model.daga_guidance_layer_idx})")
+            if is_daga_model and adapted_attn_np is not None:
+                # DAGA: 1x4 layout
+                fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+                fig.suptitle(fig_title, fontsize=14, fontweight="bold")
+                
+                # Panel 1: Original Image
+                axes[0].imshow(img)
+                axes[0].set_title("Original Image")
+                axes[0].axis("off")
+                
+                # Panel 2: Frozen Backbone Attention
+                im1 = axes[1].imshow(baseline_attn_np[j], cmap="viridis", vmin=0, vmax=1)
+                axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
+                axes[1].axis("off")
+                plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+                
+                # Panel 3: Adapted Attention (after DAGA)
+                im2 = axes[2].imshow(adapted_attn_np[j], cmap="viridis", vmin=0, vmax=1)
+                axes[2].set_title(f"Adapted Attn (After DAGA, L{vis_attn_layer})")
+                axes[2].axis("off")
+                plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+                
+                # Panel 4: Adapted Attention Overlay
+                axes[3].imshow(img)
+                attn_map = adapted_attn_np[j]
+                if attn_map.shape != img.shape[:2]:
+                    zoom_h = img.shape[0] / attn_map.shape[0]
+                    zoom_w = img.shape[1] / attn_map.shape[1]
+                    attn_resized = zoom(attn_map, (zoom_h, zoom_w), order=1)
+                else:
+                    attn_resized = attn_map
+                im3 = axes[3].imshow(attn_resized, cmap="jet", alpha=0.5, vmin=0, vmax=1)
+                axes[3].set_title("Adapted Attn Overlay")
                 axes[3].axis("off")
+                plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04)
+            else:
+                # Baseline: 1x2 layout
+                fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+                fig.suptitle(fig_title, fontsize=14, fontweight="bold")
+                
+                # Panel 1: Original Image
+                axes[0].imshow(img)
+                axes[0].set_title("Original Image")
+                axes[0].axis("off")
+                
+                # Panel 2: Frozen Backbone Attention
+                im1 = axes[1].imshow(baseline_attn_np[j], cmap="viridis", vmin=0, vmax=1)
+                axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
+                axes[1].axis("off")
+                plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
             
             plt.tight_layout(rect=[0, 0, 1, 0.96])
             vis_figs.append(fig)
@@ -388,6 +400,22 @@ def prepare_visualization_data(test_dataset, args, device):
     """Prepare fixed batch of images for visualization"""
     if not args.enable_visualization:
         return None
+    
+    # 边界检查：确保 vis_indices 不超过测试集大小
+    max_idx = len(test_dataset) - 1
+    valid_indices = [idx for idx in args.vis_indices if idx <= max_idx]
+    
+    if len(valid_indices) < len(args.vis_indices):
+        print(f"⚠️  Warning: Some vis_indices exceed test set size ({len(test_dataset)})")
+        print(f"   Original indices: {args.vis_indices}")
+        # 如果有无效索引，用有效的随机索引替换
+        if len(valid_indices) == 0:
+            # 所有索引都无效，生成新的
+            import random
+            valid_indices = random.sample(range(len(test_dataset)), min(4, len(test_dataset)))
+        args.vis_indices = valid_indices
+        print(f"   Adjusted indices: {args.vis_indices}")
+    
     print(f"\n📸 Preparing visualization data for image indices: {args.vis_indices}...")
     vis_subset = torch.utils.data.Subset(test_dataset, args.vis_indices)
     vis_loader = DataLoader(vis_subset, batch_size=len(args.vis_indices), shuffle=False)

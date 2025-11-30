@@ -69,9 +69,11 @@ def setup_logging(args, task_name="classification"):
     
     if enable_swanlab:
         # Define project names for different tasks
-        # Paper comparison experiments use the same projects as main experiments
+        # For classification, use dataset name in project
+        dataset_name = getattr(args, 'dataset', 'unknown').upper()
+        
         project_mapping = {
-            "classification": "DINOv3-ImageNet-Classification",
+            "classification": f"DINOv3-{dataset_name}-Classification",
             "dinotxt": "DINOv3-COCO-TextImageAlignment",
             "detection": "DINOv3-COCO-Detection", 
             "segmentation": "DINOv3-ADE20K-Segmentation",
@@ -80,7 +82,7 @@ def setup_logging(args, task_name="classification"):
             "linear": "DINOv3-Linear-Probing",
             "logreg": "DINOv3-Logistic-Regression",
             "knn": "DINOv3-KNN-Evaluation",
-            "paper_comparison": "DINOv3-ImageNet-Classification",  # Use same as classification
+            "paper_comparison": f"DINOv3-{dataset_name}-Classification",
         }
         
         project_name = project_mapping.get(task_name, f"DINOv3-{task_name}")

@@ -9,16 +9,21 @@ source "${SCRIPT_DIR}/common_config.sh"
 # Task-Specific Configuration
 # ============================================================================
 DATASET="nyu_depth_v2"  # or "kitti"
-DATA_PATH="/home/user/zhoutianjian/DataSets/NYUDepthV2"
+# Use BTS format dataset (24K images) - recommended
+DATA_PATH="/home/user/zhoutianjian/DataSets/NYU_BTS"
+# Fallback to labeled.mat (1449 images): "/home/user/zhoutianjian/DataSets/NYUDepthV2"
 BASE_OUTPUT_DIR="outputs/depth"
 
 # Depth estimation hyperparameters
+# Now using BTS dataset (~24K images) - same as DINOv3 official
+# DINOv3 official settings: bs=2, 8GPUs, lr=3e-4, ~26 epochs (38400 iters)
+# Our setting: bs=4, 5GPUs, lr=3e-4, ~25 epochs (~24K * 25 / (4*5) = 30K iters)
 BATCH_SIZE=4  
-INPUT_SIZE=518
+INPUT_SIZE=518          # DINOv3 recommended size (official uses 416x544)
 NUM_WORKERS=16
-SAMPLE_RATIO=""  # Empty = use full dataset (or "0.1" for testing with 10%)
-EPOCHS=30  
-LR=5e-3  
+SAMPLE_RATIO=""         # Empty = use full dataset (or "0.1" for testing with 10%)
+EPOCHS=25               # Similar to DINOv3 official (~26 epochs with 24K images)
+LR=3e-4                 # Same as DINOv3 official  
 
 # Visualization and logging
 LOG_FREQ=5  
@@ -47,8 +52,8 @@ print_config "Depth Estimation"
 
 # Run experiments
 # Baseline model - no DAGA
-# run_experiment "main_depth.py" "01_baseline" "Baseline (Multi-scale Features)" \
-#     --min_depth $MIN_DEPTH --max_depth $MAX_DEPTH
+run_experiment "main_depth.py" "01_baseline" "Baseline (Multi-scale Features)" \
+    --min_depth $MIN_DEPTH --max_depth $MAX_DEPTH
 
 # DAGA on all feature extraction layers
 run_experiment "main_depth.py" "02_daga_feature_layers" "DAGA Feature Layers (L2,L5,L8,L11)" \
