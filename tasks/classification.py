@@ -132,13 +132,12 @@ class ClassificationModel(nn.Module):
         return logits, adapted_attn_weights, daga_guidance_map
 
 
-def setup_training_components(model, args, world_size=1):
+def setup_training_components(model, args):
     """Setup criterion, optimizer, scheduler
     
     Args:
         model: The model to train
         args: Training arguments
-        world_size: Number of GPUs in DDP training (default: 1)
     """
     from torch.nn.parallel import DistributedDataParallel as DDP
     
@@ -157,16 +156,14 @@ def setup_training_components(model, args, world_size=1):
             else:
                 classifier_params.append(param)
     
-    # Linear learning rate scaling rule: lr ∝ batch_size
-    # Reference batch size is 256, so: lr_scaled = base_lr * (total_batch_size / 256)
-    # In DDP: total_batch_size = per_gpu_batch_size * world_size
-    total_batch_size = args.batch_size * world_size
-    lr_scaled = args.lr * total_batch_size / 256.0
+    # Use the learning rate directly as specified (no scaling)
+    # DDP already handles gradient averaging across GPUs
+    lr = args.lr
     
-    param_groups = [{"params": classifier_params, "lr": lr_scaled, "weight_decay": 0.0}]
+    param_groups = [{"params": classifier_params, "lr": lr, "weight_decay": 0.0}]
     if daga_params:
         param_groups.append(
-            {"params": daga_params, "lr": lr_scaled * 0.5, "weight_decay": 0.0}
+            {"params": daga_params, "lr": lr * 0.5, "weight_decay": 0.0}
         )
     
     optimizer = torch.optim.SGD(param_groups, momentum=0.9, nesterov=True)

@@ -22,7 +22,7 @@ LOG_FREQ=5
 DATASET="cifar100"
 DATA_PATH="/home/user/zhoutianjian/DataSets/cifar"
 EPOCHS=20
-LR=4e-4
+LR=2e-1
 
 setup_environment
 setup_paths
@@ -30,7 +30,7 @@ mkdir -p "$BASE_OUTPUT_DIR"
 
 print_config "Classification"
 
-# run_experiment "main_classification.py" "01_baseline" "Baseline"
+run_experiment "main_classification.py" "01_baseline" "Baseline"
 
 run_experiment "main_classification.py" "04_daga_hourglass_layer" "DAGA (L1,L2,L10,L11)" \
     --use_daga --daga_layers 1 2 10 11

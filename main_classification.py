@@ -186,7 +186,7 @@ def main():
         print(f"\n✓ Model wrapped with DDP on {world_size} GPUs ({mode_status})")
     
     # Pass world_size for proper learning rate scaling in DDP
-    criterion, optimizer, scheduler = setup_training_components(model, args, world_size=world_size)
+    criterion, optimizer, scheduler = setup_training_components(model, args)
     
     # Only prepare visualization on main process
     if is_main_process:
