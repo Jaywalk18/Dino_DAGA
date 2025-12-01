@@ -1,3 +1,7 @@
+"""
+DINOv3 Semantic Segmentation with DAGA
+Supports VOC2012 and Cityscapes datasets
+"""
 import torch
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -10,7 +14,7 @@ import os
 from core.backbones import load_dinov3_backbone
 from core.utils import setup_environment, setup_logging, finalize_experiment
 from core.ddp_utils import setup_ddp, cleanup_ddp, create_ddp_dataloaders
-from data.segmentation_datasets import get_segmentation_dataset
+from core.datasets.segmentation_datasets import get_segmentation_dataset
 from tasks.segmentation import (
     SegmentationModel, 
     setup_training_components, 
@@ -24,25 +28,27 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 
 def parse_arguments():
     """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(description="DINOv3 Segmentation with DAGA")
+    parser = argparse.ArgumentParser(description="DINOv3 Semantic Segmentation with DAGA")
     
+    # Model
     parser.add_argument(
         "--model_name",
         type=str,
-        default="dinov3_vits16",
+        default="dinov3_vitb16",
         help="DINOv3 model architecture",
     )
     parser.add_argument(
         "--pretrained_path",
         type=str,
-        default="dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
+        default="dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth",
         help="Path to pretrained checkpoint",
     )
     
+    # Dataset
     parser.add_argument(
         "--dataset",
-        choices=["ade20k", "coco"],
-        default="ade20k",
+        choices=["voc2012", "cityscapes"],
+        default="voc2012",
         help="Dataset to use",
     )
     parser.add_argument(
@@ -52,18 +58,13 @@ def parse_arguments():
         help="Path to dataset root",
     )
     parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=None,
-        help="Maximum number of training samples to use (for quick testing)",
-    )
-    parser.add_argument(
-        "--sample_ratio",
-        type=float,
-        default=None,
-        help="Fraction (0, 1] of the dataset to use for quick testing",
+        "--sample_ratio", 
+        type=float, 
+        default=1.0, 
+        help="Ratio of training data to use"
     )
     
+    # DAGA
     parser.add_argument(
         "--use_daga",
         action="store_true",
@@ -81,31 +82,33 @@ def parse_arguments():
         type=int,
         nargs="+",
         default=[2, 5, 8, 11],
-        help="Feature extraction layers",
+        help="Output indices for multi-scale features",
     )
     
-    parser.add_argument("--input_size", type=int, default=518, help="Input image size")
-    parser.add_argument("--epochs", type=int, default=20, help="Number of epochs")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    # Training
+    parser.add_argument("--input_size", type=int, default=512, help="Input image size")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_workers", type=int, default=8, help="Number of data loading workers")
     
-    parser.add_argument("--output_dir", default="./outputs", help="Output directory")
+    # Output
+    parser.add_argument("--output_dir", default="./outputs/segmentation", help="Output directory")
     parser.add_argument("--enable_swanlab", action="store_true", default=True, help="Enable SwanLab logging")
     parser.add_argument("--swanlab_name", type=str, default=None, help="SwanLab experiment name")
     parser.add_argument("--log_freq", type=int, default=5, help="Visualization log frequency")
     parser.add_argument(
-        "--enable_visualization",
-        action="store_true",
-        help="Enable segmentation visualization",
-    )
-    parser.add_argument(
         "--num_vis_samples",
         type=int,
         default=4,
-        help="Number of samples to visualize",
+        help="Number of samples for visualization",
+    )
+    parser.add_argument(
+        "--enable_visualization",
+        action="store_true",
+        help="Enable segmentation visualization",
     )
     
     return parser.parse_args()
@@ -116,70 +119,49 @@ def main():
     local_rank, rank, world_size = setup_ddp()
     is_main_process = (rank == 0)
     
+    device = torch.device(f"cuda:{local_rank}")
+    torch.cuda.set_device(device)
+    
     args = parse_arguments()
-    setup_environment(args.seed + rank)  # Different seed per process
+    setup_environment(args.seed + rank)
     
     if is_main_process:
         experiment_name = setup_logging(args, task_name="segmentation")
         output_dir = Path(args.output_dir) / experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
     else:
-        experiment_name = None
         output_dir = None
     
-    # Synchronize output_dir across all processes
-    if is_main_process:
-        output_dir_str = str(output_dir)
-    else:
-        output_dir_str = None
-    
-    # Broadcast output_dir to all processes
-    output_dir_list = [output_dir_str] if is_main_process else [None]
+    # Broadcast output_dir
+    output_dir_list = [str(output_dir)] if is_main_process else [None]
+    dist.barrier()
     dist.broadcast_object_list(output_dir_list, src=0)
     if not is_main_process:
         output_dir = Path(output_dir_list[0])
     
-    device = torch.device(f"cuda:{local_rank}")
-    
     if is_main_process:
         print(f"\n{'='*70}")
         print(f"DDP Training with {world_size} GPUs")
+        print(f"Rank {rank} using device: {device}")
         print(f"Loading {args.dataset.upper()} dataset...")
     
-    train_dataset, val_dataset, num_classes = get_segmentation_dataset(args)
+    # Load datasets
+    train_dataset, num_classes = get_segmentation_dataset(
+        args.dataset, args.data_path, 'train', args.input_size
+    )
+    val_dataset, _ = get_segmentation_dataset(
+        args.dataset, args.data_path, 'val', args.input_size
+    )
     
-    limit_train = None
-    limit_val = None
-    if args.sample_ratio is not None:
-        if not (0 < args.sample_ratio <= 1.0):
-            raise ValueError("sample_ratio must be in the range (0, 1].")
-        limit_train = max(1, int(len(train_dataset) * args.sample_ratio))
-        limit_val = max(1, int(len(val_dataset) * args.sample_ratio))
-    if args.max_samples is not None:
-        limit_train = min(args.max_samples, len(train_dataset))
-        limit_val = min(max(1, args.max_samples // 2), len(val_dataset))
-    
-    if limit_train is not None or limit_val is not None:
-        import random
-        random.seed(args.seed)
-        if limit_train is None:
-            limit_train = len(train_dataset)
-        if limit_val is None:
-            limit_val = len(val_dataset)
-        if limit_train < len(train_dataset):
-            train_indices = random.sample(range(len(train_dataset)), limit_train)
-            train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
-        if limit_val < len(val_dataset):
-            val_indices = random.sample(range(len(val_dataset)), limit_val)
-            val_dataset = torch.utils.data.Subset(val_dataset, val_indices)
-        if is_main_process:
-            print(f"✓ Dataset loaded: {len(train_dataset)} train (limited), {len(val_dataset)} val (limited) samples")
-    else:
-        if is_main_process:
-            print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
+    # Apply sample ratio if needed
+    if args.sample_ratio < 1.0:
+        num_samples = int(len(train_dataset) * args.sample_ratio)
+        indices = torch.randperm(len(train_dataset))[:num_samples].tolist()
+        train_dataset = torch.utils.data.Subset(train_dataset, indices)
     
     if is_main_process:
-        print(f"  Number of classes: {num_classes}")
+        print(f"✓ Dataset loaded: {len(train_dataset)} train, {len(val_dataset)} val samples")
+        print(f"  Num classes: {num_classes}")
         print(f"  Batch size per GPU: {args.batch_size}")
         print(f"  Effective batch size: {args.batch_size * world_size}")
     
@@ -205,22 +187,13 @@ def main():
     model.to(device)
     
     # Wrap model with DDP
-    # Determine if we need find_unused_parameters based on DAGA configuration
-    # Only need it if DAGA layers are ALL after the last out_index (very rare)
-    need_find_unused = False
-    if args.use_daga and args.daga_layers:
-        max_out_idx = max(args.out_indices)
-        # If all DAGA layers are after the last output index, they won't affect output
-        if all(daga_idx > max_out_idx for daga_idx in args.daga_layers):
-            need_find_unused = True
-    
     model = DDP(
         model, 
         device_ids=[local_rank], 
         output_device=local_rank, 
-        find_unused_parameters=need_find_unused,
-        broadcast_buffers=False,  # Reduce communication overhead
-        gradient_as_bucket_view=True  # More efficient gradient handling
+        find_unused_parameters=False,
+        broadcast_buffers=False,
+        gradient_as_bucket_view=True
     )
     
     if is_main_process:
@@ -229,7 +202,7 @@ def main():
     
     criterion, optimizer, scheduler = setup_training_components(model, args)
     
-    # Only prepare visualization on main process
+    # Prepare visualization data
     if is_main_process:
         fixed_vis_images, fixed_vis_masks = prepare_visualization_data(val_dataset, args, device)
     else:
@@ -259,7 +232,8 @@ def main():
         )
         
         if is_main_process:
-            finalize_experiment(best_miou, final_miou, total_time, output_dir, metric_name="mIoU", enable_swanlab=args.enable_swanlab)
+            finalize_experiment(best_miou, final_miou, total_time, output_dir, 
+                              metric_name="mIoU", enable_swanlab=args.enable_swanlab)
     finally:
         cleanup_ddp()
 

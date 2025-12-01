@@ -3,6 +3,18 @@
 # This file should be sourced by run_classification.sh, run_detection.sh, run_segmentation.sh
 
 # ============================================================================
+# Signal Handling - Kill all child processes on exit
+# ============================================================================
+cleanup() {
+    echo ""
+    echo "🛑 Caught signal, terminating all processes..."
+    # Kill all processes in the current process group
+    kill -- -$$ 2>/dev/null
+    exit 1
+}
+trap cleanup SIGINT SIGTERM SIGHUP
+
+# ============================================================================
 # Environment Setup
 # ============================================================================
 setup_environment() {

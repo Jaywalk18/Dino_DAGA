@@ -205,7 +205,7 @@ class NYUDepthV2Dataset(Dataset):
             self.h5_file = h5py.File(str(self.mat_file), 'r')
             self.h5_images = self.h5_file['images']
             self.h5_depths = self.h5_file['depths']
-        
+    
         actual_idx = self.start_idx + idx
         
         # Load from h5py
@@ -277,7 +277,7 @@ def test_dataset():
         image, depth = dataset[0]
         print(f"  Image shape: {image.shape}, range: [{image.min():.3f}, {image.max():.3f}]")
         print(f"  Depth shape: {depth.shape}, range: [{depth.min():.3f}, {depth.max():.3f}]")
-        
+    
     except Exception as e:
         print(f"✗ Error: {e}")
     

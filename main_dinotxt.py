@@ -1115,26 +1115,26 @@ def main():
         
         # Evaluate R@1 every epoch (all processes participate)
         should_visualize = args.enable_visualization and is_main_process and ((epoch + 1) % args.log_freq == 0)
-        vis_images, vis_captions, vis_vision_feat, vis_text_feat = [], [], None, None
-        
-        # All processes participate in evaluation using DDP test_loader
-        if should_visualize:
-            result = evaluate(
-                model, test_loader, device, rank,
-                collect_for_vis=True, 
-                num_vis_samples=args.num_vis_samples,
-                dataset=test_dataset
-            )
-            i2t_acc, t2i_acc, vis_images, vis_captions, vis_vision_feat, vis_text_feat = result
-        else:
-            i2t_acc, t2i_acc = evaluate(model, test_loader, device, rank)
-        
-        if is_main_process:
-            print(f"\nEpoch {epoch+1}/{args.epochs}:")
-            print(f"  Train Loss: {avg_loss:.4f}")
-            print(f"  Image-to-Text R@1: {i2t_acc*100:.2f}%")
-            print(f"  Text-to-Image R@1: {t2i_acc*100:.2f}%")
+            vis_images, vis_captions, vis_vision_feat, vis_text_feat = [], [], None, None
             
+            # All processes participate in evaluation using DDP test_loader
+            if should_visualize:
+                result = evaluate(
+                    model, test_loader, device, rank,
+                    collect_for_vis=True, 
+                    num_vis_samples=args.num_vis_samples,
+                    dataset=test_dataset
+                )
+                i2t_acc, t2i_acc, vis_images, vis_captions, vis_vision_feat, vis_text_feat = result
+            else:
+                i2t_acc, t2i_acc = evaluate(model, test_loader, device, rank)
+            
+            if is_main_process:
+                print(f"\nEpoch {epoch+1}/{args.epochs}:")
+                print(f"  Train Loss: {avg_loss:.4f}")
+                print(f"  Image-to-Text R@1: {i2t_acc*100:.2f}%")
+                print(f"  Text-to-Image R@1: {t2i_acc*100:.2f}%")
+                
             # Log R@1 metrics to SwanLab every epoch
             try:
                 import swanlab
@@ -1174,8 +1174,8 @@ def main():
                 
                 # Log visualizations to SwanLab
                 if vis_figs:
-                    try:
-                        import swanlab
+                try:
+                    import swanlab
                         import matplotlib.pyplot as plt
                         swanlab.log({
                             "visualizations": [swanlab.Image(fig) for fig in vis_figs]
@@ -1183,20 +1183,20 @@ def main():
                         # Close figures to free memory
                         for fig in vis_figs:
                             plt.close(fig)
-                    except Exception as e:
+                except Exception as e:
                         print(f"  Warning: SwanLab visualization logging failed: {e}")
-            
-            # Save best model
-            if i2t_acc > best_i2t_acc:
-                best_i2t_acc = i2t_acc
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.module.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'i2t_acc': i2t_acc,
-                    't2i_acc': t2i_acc,
-                }, output_dir / "best_model.pth")
-                print(f"  ✓ Saved best model (I2T R@1: {best_i2t_acc*100:.2f}%)")
+                
+                # Save best model
+                if i2t_acc > best_i2t_acc:
+                    best_i2t_acc = i2t_acc
+                    torch.save({
+                        'epoch': epoch,
+                        'model_state_dict': model.module.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'i2t_acc': i2t_acc,
+                        't2i_acc': t2i_acc,
+                    }, output_dir / "best_model.pth")
+                    print(f"  ✓ Saved best model (I2T R@1: {best_i2t_acc*100:.2f}%)")
         
         dist.barrier()
     

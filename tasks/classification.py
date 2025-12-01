@@ -331,28 +331,19 @@ def visualize_attention_comparison(
             img = np.clip(std * img + mean, 0, 1)
             
             if is_daga_model and adapted_attn_np is not None:
-                # DAGA: 1x4 layout
                 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
                 fig.suptitle(fig_title, fontsize=14, fontweight="bold")
-                
-                # Panel 1: Original Image
                 axes[0].imshow(img)
                 axes[0].set_title("Original Image")
                 axes[0].axis("off")
-                
-                # Panel 2: Frozen Backbone Attention
                 im1 = axes[1].imshow(baseline_attn_np[j], cmap="viridis", vmin=0, vmax=1)
                 axes[1].set_title(f"Frozen Backbone Attn (L{vis_attn_layer})")
                 axes[1].axis("off")
                 plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-                
-                # Panel 3: Adapted Attention (after DAGA)
                 im2 = axes[2].imshow(adapted_attn_np[j], cmap="viridis", vmin=0, vmax=1)
                 axes[2].set_title(f"Adapted Attn (After DAGA, L{vis_attn_layer})")
                 axes[2].axis("off")
                 plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
-                
-                # Panel 4: Adapted Attention Overlay
                 axes[3].imshow(img)
                 attn_map = adapted_attn_np[j]
                 if attn_map.shape != img.shape[:2]:
